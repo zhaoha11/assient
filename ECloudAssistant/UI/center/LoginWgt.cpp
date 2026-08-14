@@ -112,8 +112,13 @@ void LoginWgt::HandleLogin(LoginResult *data)
         switch (data->resultCode)
         {
         case S_OK_:
-            qDebug() << "[Login] success: sigIp =" << data->GetIp().c_str() << "sigPort =" << data->port;
-            emit sig_logined(data->GetIp(), data->port);
+            if (data->GetCode().empty())
+            {
+                qWarning() << "[Login] failed: server returned an empty user code";
+                break;
+            }
+            qDebug() << "[Login] success: sigIp =" << data->GetIp().c_str() << "sigPort =" << data->port << "userCode =" << data->GetCode().c_str();
+            emit sig_logined(data->GetIp(), data->port, data->GetCode());
             break;
         case ACCOUNT_NOT_FOUND:
             qWarning() << "[Login] failed: account does not exist, account =" << acountEdit_->text();

@@ -12,7 +12,7 @@ class LoginWgt : public QWidget
 public:
     explicit LoginWgt(QWidget *parent = nullptr);
 signals:
-    void sig_logined(const std::string ip, uint16_t port);
+    void sig_logined(const std::string ip, uint16_t port, const std::string code);
 protected slots:
     void ReadData();
     void HandleMessage(const packet_head* data);

@@ -148,6 +148,8 @@ void LoginConnection::HandleLogin(const packet_head *data)
             reply.resultCode = S_OK;
             reply.SetIp("192.168.3.130");
             reply.port = 6539;
+            // 信令身份以数据库 USER_CODE 为准，不使用登录包中的临时 code。
+            reply.SetCode(usercode);
 
             const auto now = std::chrono::system_clock::now();
             const auto nowTimestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
@@ -158,9 +160,9 @@ void LoginConnection::HandleLogin(const packet_head *data)
         }
     }
 
-    printf("[LoginSvr] send LoginResult: result=%d, sigIp=%s, sigPort=%u\n",
+    printf("[LoginSvr] send LoginResult: result=%d, sigIp=%s, sigPort=%u, userCode=%s\n",
            static_cast<int>(reply.resultCode), reply.GetIp().c_str(),
-           static_cast<unsigned int>(reply.port));
+           static_cast<unsigned int>(reply.port), reply.GetCode().c_str());
     this->Send((const char *)&reply, reply.len);
 }
 void LoginConnection::HandleDestory(const packet_head *data)

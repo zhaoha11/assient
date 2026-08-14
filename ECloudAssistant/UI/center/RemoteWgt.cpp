@@ -14,7 +14,7 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     startRmoteBtn_ = new QPushButton(QString("开始远程"),this);
     manager_.reset(new RemoteManager());
 
-    selfCodeEdit_->setText("123");
+    selfCodeEdit_->setReadOnly(true);
 
     this->setObjectName("RemoteWgt");
     selfCodeEdit_->setObjectName("selfCodeEdit");
@@ -47,16 +47,17 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     });
 }
 
-void RemoteWgt::handleLogined(const std::string ip, uint16_t port)
+void RemoteWgt::handleLogined(const std::string ip, uint16_t port, const std::string code)
 {
-    //code怎么来，按理说code应该是注册的时候由这个服务器通过算法来去创建分配，由客户端来创建。
-    //连接信令服务器
-    QString code = selfCodeEdit_->text();
-    if(code.isEmpty())
+    if(code.empty())
     {
         return;
     }
-    ip_ = QString(ip.c_str());
+
+    // 使用登录服务器返回的数据库 USER_CODE 注册当前客户端的信令身份。
+    const QString userCode = QString::fromStdString(code);
+    selfCodeEdit_->setText(userCode);
+    ip_ = QString::fromStdString(ip);
     port_ = port;
-    manager_->Init(QString(ip.c_str()),port,code);
+    manager_->Init(ip_, port_, userCode);
 }

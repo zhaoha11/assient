@@ -139,6 +139,7 @@ struct LoginResult : public packet_head
         resultCode = SERVER_ERROR;
         port = 0;
         ctrSvrIp.fill('\0');
+        code.fill('\0');
     }
     void SetIp(const std::string &str)
     {
@@ -150,9 +151,20 @@ struct LoginResult : public packet_head
     {
         return std::string(ctrSvrIp.data());
     }
+    void SetCode(const std::string &str)
+    {
+        code.fill('\0');
+        str.copy(code.data(), code.size() - 1, 0);
+    }
+    std::string GetCode() const
+    {
+        return std::string(code.data());
+    }
     ResultCode resultCode;
     uint16_t port;
     std::array<char, 16> ctrSvrIp;
+    // 登录成功后返回数据库中的 USER_CODE，供客户端注册信令身份。
+    std::array<char, 20> code;
 };
 
 struct UserDestory : public packet_head

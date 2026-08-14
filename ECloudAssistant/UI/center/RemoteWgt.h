@@ -11,7 +11,7 @@ class RemoteWgt : public QWidget
 public:
     explicit RemoteWgt(QWidget *parent = nullptr);
 public slots:
-    void handleLogined(const std::string ip, uint16_t port);
+    void handleLogined(const std::string ip, uint16_t port, const std::string code);
 private:
     QString ip_ = "";
     uint16_t port_ = -1;

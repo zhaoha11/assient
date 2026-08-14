@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <array>
+#include <cstring>
 
 #pragma pack(push,1)
 enum Cmd : uint16_t
@@ -177,6 +178,7 @@ struct LoginResult : public packet_head
         resultCode = SERVER_ERROR;
         port = 0;
         ctrSvrIp.fill('\0');
+        code.fill('\0');
     }
     void SetIp(const std::string& str)
     {
@@ -188,9 +190,20 @@ struct LoginResult : public packet_head
     {
         return std::string(ctrSvrIp.data());
     }
+    void SetCode(const std::string& str)
+    {
+        code.fill('\0');
+        str.copy(code.data(), code.size() - 1, 0);
+    }
+    std::string GetCode() const
+    {
+        return std::string(code.data());
+    }
     ResultCode resultCode;
     uint16_t port;
     std::array<char, 16> ctrSvrIp;
+    // 登录成功后由服务端返回，用作客户端在信令服务器中的唯一标识。
+    std::array<char, 20> code;
 };
 
 struct UserDestory : public packet_head
