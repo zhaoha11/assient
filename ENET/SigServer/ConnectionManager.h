@@ -9,7 +9,7 @@ public:
     ~ConnectionManager();
     static ConnectionManager* GetInstance();
 public:
-    void AddConn(const std::string& idefy,const TcpConnection::Ptr conn);
+    bool AddConn(const std::string& idefy,const TcpConnection::Ptr conn);
     void RmvConn(const std::string& idefy);
     TcpConnection::Ptr QueryConn(const std::string& idefy);
     uint32_t Size()const{return connMaps_.size();}

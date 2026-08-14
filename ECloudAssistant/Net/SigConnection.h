@@ -40,9 +40,11 @@ protected:
     void OnClose();
     void HandleMessage(BufferReader& buffer);
 private:
+    static QString GenerateControlSessionCode();
     qint32 Join();
     qint32 obtainStream();
     void doJoin(const packet_head* data);
+    void doObtainStreamReply(const packet_head* data);
     void doPlayStream(const packet_head* data);
     void doCtreatStream(const packet_head* data);
     void doDeleteStream(const packet_head* data);
@@ -54,7 +56,11 @@ private:
 private:
     bool quit_ = false;
     State state_;
-    QString code_ = "";
+    // Identity used by this TCP connection when it joins SigServer.
+    QString joinCode_ = "";
+    // Target device USER_CODE, used only by controlling connections.
+    QString targetCode_ = "";
+    int joinRetryCount_ = 0;
     const UserType type_;
     QScreen* screen_ = nullptr;
     StopStreamCallBack stopStreamCb_ = [](){};

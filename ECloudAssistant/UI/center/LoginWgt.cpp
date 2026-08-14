@@ -112,9 +112,9 @@ void LoginWgt::HandleLogin(LoginResult *data)
         switch (data->resultCode)
         {
         case S_OK_:
-            if (data->GetCode().empty())
+            if (data->GetCode().empty() || data->GetCode().size() > 9)
             {
-                qWarning() << "[Login] failed: server returned an empty user code";
+                qWarning() << "[Login] failed: server returned an invalid user code (expected 1 to 9 bytes)";
                 break;
             }
             qDebug() << "[Login] success: sigIp =" << data->GetIp().c_str() << "sigPort =" << data->port << "userCode =" << data->GetCode().c_str();

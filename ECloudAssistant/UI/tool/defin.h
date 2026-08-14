@@ -257,7 +257,8 @@ struct Join_body : public packet_head
     }
     void SetId(const std::string& str)
     {
-        str.copy(id.data(),id.size(),0);
+        id.fill('\0');
+        str.copy(id.data(), id.size() - 1, 0);
     }
     std::string GetId()
     {
@@ -292,7 +293,8 @@ struct ObtainStream_body : public packet_head
     }
     void SetId(const std::string& str)
     {
-        str.copy(id.data(),id.size(),0);
+        id.fill('\0');
+        str.copy(id.data(), id.size() - 1, 0);
     }
     std::string GetId()
     {

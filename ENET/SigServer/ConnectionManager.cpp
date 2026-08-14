@@ -20,18 +20,14 @@ ConnectionManager *ConnectionManager::GetInstance()
     return instance_.get();
 }
 
-void ConnectionManager::AddConn(const std::string &idefy, const TcpConnection::Ptr conn)
+bool ConnectionManager::AddConn(const std::string &idefy, const TcpConnection::Ptr conn)
 {
     if(idefy.empty())
     {
-        return;
+        return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = connMaps_.find(idefy);
-    if(it == connMaps_.end()) //说明这个连接器未加入
-    {
-        connMaps_.emplace(idefy,conn);
-    }
+    return connMaps_.emplace(idefy,conn).second;
 }
 
 void ConnectionManager::RmvConn(const std::string &idefy)

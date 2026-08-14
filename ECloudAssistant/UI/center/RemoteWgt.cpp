@@ -1,5 +1,6 @@
 ﻿#include "RemoteWgt.h"
 #include <QVBoxLayout>
+#include <QDebug>
 #include "StyleLoader.h"
 
 RemoteWgt::RemoteWgt(QWidget *parent)
@@ -39,8 +40,9 @@ RemoteWgt::RemoteWgt(QWidget *parent)
         //开始远程
         //获取远程code
         QString code = rmoteCodeEdit_->text();
-        if(code.isEmpty())
+        if(code.isEmpty() || code.toUtf8().size() > 9)
         {
+            qWarning() << "[Remote] target code must contain 1 to 9 bytes";
             return;
         }
         manager_->StartRemote(ip_,port_,code);

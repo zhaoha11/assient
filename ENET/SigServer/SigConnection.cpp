@@ -50,7 +50,7 @@ void SigConnection::RmoveCustom(const std::string &code)
     objectes_.erase(std::remove(objectes_.begin(),objectes_.end(),code),objectes_.end());
     if(objectes_.empty())
     {
-        state_ == IDLE; //说明当前没有控制端，自己也不是控制端
+        state_ = IDLE; // Reset to idle after the last controller disconnects.
     }
 }
 
@@ -134,17 +134,16 @@ void SigConnection::HandleJion(const packet_head *data)
     if(this->IsNoJion())
     {
         std::string code = body->GetId();
-        TcpConnection:Ptr ptr = ConnectionManager::GetInstance()->QueryConn(code);//是不是已经存在
-        if(ptr)
+        if(!ConnectionManager::GetInstance()->AddConn(code, shared_from_this()))
         {
+            printf("[SigSvr] JOIN rejected: code=%s is already in use\n", code.c_str());
             reply_body.SetCode(ERROR);
             this->Send((const char*)&reply_body,reply_body.len);
             return;
         }
         code_ = code;
         state_ = IDLE;
-        ConnectionManager::GetInstance()->AddConn(code,shared_from_this());
-        printf("Jion count: %d\n",ConnectionManager::GetInstance()->Size());
+        printf("[SigSvr] JOIN accepted: code=%s, count=%d\n", code_.c_str(), ConnectionManager::GetInstance()->Size());
         reply_body.SetCode(SUCCESSFUL);
         this->Send((const char*)&reply_body,reply_body.len);
         return;
@@ -212,6 +211,13 @@ void SigConnection::DoObtainStream(const packet_head *data)
     if(this->IsIdle())//本身是空闲就去获取流
     {
         auto con = std::dynamic_pointer_cast<SigConnection>(conn);
+        if (!con->objectes_.empty())
+        {
+            printf("[SigSvr] obtain rejected: target=%s already has a controller\n", code.c_str());
+            reply.SetCode(ERROR);
+            this->Send((const char*)&reply,reply.len);
+            return;
+        }
         switch (con->GetRoleState())
         {
         case IDLE://目标是空闲，我们就去通知他去推流
@@ -240,25 +246,10 @@ void SigConnection::DoObtainStream(const packet_head *data)
             reply.SetCode(ERROR);
             this->Send((const char*)&reply,reply.len);
             break;
-        case PUSHER: //推流说明他是被控端，所以我们可以去拉流
-            if(con->GetStreamAddres().empty()) //异常
-            {
-                printf("目标正在推流，但是流地址异常\n");
-                reply.SetCode(ERROR);
-                this->Send((const char*)&reply,reply.len);
-            }
-            else//在推流，而且流地址正常
-            {
-                printf("目标正在推流\n");
-                this->state_ = PULLER;
-                this->AddCustom(code);
-                con->AddCustom(code_);
-                //在推流 流已经存在，就不需要重新创建流，我们只需要播放流；
-                PlayStream_body play_body;
-                play_body.SetCode(SUCCESSFUL);
-                play_body.SetstreamAddres(con->GetStreamAddres());
-                this->Send((const char*)&play_body,play_body.len);
-            }
+        case PUSHER:
+            printf("[SigSvr] obtain rejected: target=%s is already controlled\n", code.c_str());
+            reply.SetCode(ERROR);
+            this->Send((const char*)&reply,reply.len);
             break;
         default:
             break;

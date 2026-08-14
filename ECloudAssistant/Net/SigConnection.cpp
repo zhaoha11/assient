@@ -1,17 +1,34 @@
 ﻿#include "SigConnection.h"
 #include "defin.h"
 #include <QDebug>
+#include <QUuid>
 #include <windows.h>
 #include <QGuiApplication>
 
 int streamIndex = 1;
+namespace
+{
+constexpr int kMaxControlJoinRetries = 3;
+constexpr int kSignalCodeMaxLength = 9;
+}
 
 SigConnection::SigConnection(TaskScheduler *scheduler, int sockfd, const QString& code,const UserType &type)
     :TcpConnection(scheduler,sockfd)
     ,state_(NONE)
     ,type_(type)
-    ,code_(code)
 {
+    if (type_ == CONTROLLED)
+    {
+        // Controlled connections register with the database USER_CODE.
+        joinCode_ = code;
+    }
+    else
+    {
+        // Controllers keep the target code and register a session-specific code.
+        targetCode_ = code;
+        joinCode_ = GenerateControlSessionCode();
+    }
+
     //设置回调函数
     SetReadCallback([this](std::shared_ptr<TcpConnection> conn,BufferReader& buffer){
         return this->OnRead(buffer);
@@ -22,6 +39,13 @@ SigConnection::SigConnection(TaskScheduler *scheduler, int sockfd, const QString
     });
 
     screen_ = QGuiApplication::primaryScreen();
+}
+QString SigConnection::GenerateControlSessionCode()
+{
+    // Join_body.id stores at most 9 bytes: C plus 8 random hex characters.
+    QString uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    uuid.remove('-');
+    return QStringLiteral("C") + uuid.left(8).toUpper();
 }
 
 SigConnection::~SigConnection()
@@ -71,6 +95,9 @@ void SigConnection::HandleMessage(BufferReader &buffer)
     case JOIN:
         doJoin(head); //处理创建房间
         break;
+    case OBTAINSTREAM:
+        doObtainStreamReply(head);
+        break;
     case PLAYSTREAM:
         doPlayStream(head);
         break;
@@ -107,15 +134,15 @@ qint32 SigConnection::Join()
         return -1;
     }
     //申请创建房间
+    if (joinCode_.isEmpty() || joinCode_.toUtf8().size() > kSignalCodeMaxLength)
+    {
+        qWarning() << "[Sig] invalid join code:" << joinCode_;
+        return -1;
+    }
+
     Join_body body;
-    if(type_ == CONTROLLED)
-    {
-        body.SetId(code_.toStdString());//设置识别码，由外部传入
-    }
-    else//控制端，就需要重新创建一个匿名code
-    {
-        body.SetId("154564");//设置识别码，由外部传入
-    }
+    body.SetId(joinCode_.toStdString());
+    qDebug() << "[Sig] send JOIN, role =" << (type_ == CONTROLLED ? "controlled" : "controlling") << "joinCode =" << joinCode_;
     this->Send((const char*)&body,body.len);
     return 0;
 }
@@ -126,8 +153,13 @@ qint32 SigConnection::obtainStream()
     if(state_ == IDLE && type_ == CONTROLLING)
     {
         //获取流
+        if (targetCode_.isEmpty() || targetCode_.toUtf8().size() > kSignalCodeMaxLength)
+        {
+            qWarning() << "[Sig] invalid target code:" << targetCode_;
+            return -1;
+        }
         ObtainStream_body body;
-        body.SetId(code_.toStdString());//id就是标识符，每个客户端有一个标识符
+        body.SetId(targetCode_.toStdString());
         this->Send((const char*)&body,body.len);
         return 0;
     }
@@ -155,10 +187,34 @@ void SigConnection::doJoin(const packet_head* data)
                 qDebug() << "获取流请求发送成功";
             }
         }
+        return;
     }
-    //如果是控制端 ，创建成功之后，我们需要申请获取流
-    //如果是被控端，就不需要处理
 
+    if (type_ == CONTROLLING && joinRetryCount_ < kMaxControlJoinRetries)
+    {
+        ++joinRetryCount_;
+        joinCode_ = GenerateControlSessionCode();
+        qWarning() << "[Sig] JOIN collision, retry" << joinRetryCount_ << "with joinCode =" << joinCode_;
+        Join();
+        return;
+    }
+
+    qWarning() << "[Sig] JOIN failed, joinCode =" << joinCode_;
+    return;
+
+}
+void SigConnection::doObtainStreamReply(const packet_head* data)
+{
+    ObtainStreamReply_body* reply = (ObtainStreamReply_body*)data;
+    if (reply->result == S_OK)
+    {
+        qDebug() << "[Sig] obtain stream accepted, targetCode =" << targetCode_;
+        return;
+    }
+
+    // A rejected request must not leave this controller in the PULLER state.
+    state_ = IDLE;
+    qWarning() << "[Sig] obtain stream rejected: target is offline, invalid, or already controlled, targetCode =" << targetCode_;
 }
 
 void SigConnection::doPlayStream(const packet_head* data)
