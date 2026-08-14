@@ -1,0 +1,33 @@
+# Qt/CMake build outputs
+/ECloudAssistant/build/
+/ENET/build/
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Qt Creator and IDE-local settings
+/ECloudAssistant/.qtcreator/
+*.pro.user
+*.pro.user.*
+.vscode/
+.idea/
+
+# Compiler and linker outputs
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.pdb
+
+# OS/editor temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# Local Codex skill package, unrelated to this application
+/skills-1.2.3/
+/Codex_Skill使用说明.md
