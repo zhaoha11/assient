@@ -1,4 +1,4 @@
-﻿#ifndef LOGINWGT_H
+#ifndef LOGINWGT_H
 #define LOGINWGT_H
 #include <QTcpSocket>
 #include <QLineEdit>
@@ -12,7 +12,7 @@ class LoginWgt : public QWidget
 public:
     explicit LoginWgt(QWidget *parent = nullptr);
 signals:
-    void sig_logined(const std::string ip, uint16_t port, const std::string code);
+    void sig_logined(const std::string ip, uint16_t port, const std::string code, const std::string account);
 protected slots:
     void ReadData();
     void HandleMessage(const packet_head* data);

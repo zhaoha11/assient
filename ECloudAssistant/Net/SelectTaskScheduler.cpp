@@ -55,7 +55,7 @@ void SelectTaskScheduler::UpdateChannel(ChannelPtr channel)
     }
 }
 
-void SelectTaskScheduler::RemoveChannel(ChannelPtr &channel)
+void SelectTaskScheduler::RmoveChannel(ChannelPtr &channel)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -213,7 +213,6 @@ bool SelectTaskScheduler::HandleEvent()
     }
     return true;
 }
-
 
 
 

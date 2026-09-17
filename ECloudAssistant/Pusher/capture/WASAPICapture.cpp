@@ -1,4 +1,4 @@
-﻿#include "WASAPICapture.h"
+#include "WASAPICapture.h"
 #include <QDebug>
 
 WASAPICapture::WASAPICapture()
@@ -224,7 +224,6 @@ int WASAPICapture::capture()
 
         if(flags & AUDCLNT_BUFFERFLAGS_SILENT) //当前是没有声音 我们就去传空
         {
-            qDebug() << "AUDCLNT_BUFFERFLAGS_SILENT";
             memset(m_pcmBuf.get(),0,m_pcmBufSize);
         }
 

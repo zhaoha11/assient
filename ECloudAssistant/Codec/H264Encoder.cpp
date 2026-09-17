@@ -30,7 +30,8 @@ void H264Encoder::Close()
     h264_encoder_->Close();
 }
 
-qint32 H264Encoder::Encode(quint8 *rgba_buffer, quint32 width, quint32 height, quint32 size, std::vector<quint8> &out_frame)
+qint32 H264Encoder::Encode(const quint8 *rgba_buffer, quint32 width, quint32 height,
+                           std::vector<quint8> &out_frame, VideoEncodeTiming *timing)
 {
     //编码264
     out_frame.clear();
@@ -39,7 +40,7 @@ qint32 H264Encoder::Encode(quint8 *rgba_buffer, quint32 width, quint32 height, q
     //申请内存
     std::shared_ptr<quint8> out_buffer(new quint8[max_out_size],std::default_delete<quint8[]>());
     //开始编码
-    AVPacketPtr pkt = h264_encoder_->Encode(rgba_buffer,width,height,size);
+    AVPacketPtr pkt = h264_encoder_->Encode(rgba_buffer,width,height,timing);
     if(!pkt)
     {
         //编码失败

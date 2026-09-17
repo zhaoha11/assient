@@ -118,7 +118,7 @@ void LoginWgt::HandleLogin(LoginResult *data)
                 break;
             }
             qDebug() << "[Login] success: sigIp =" << data->GetIp().c_str() << "sigPort =" << data->port << "userCode =" << data->GetCode().c_str();
-            emit sig_logined(data->GetIp(), data->port, data->GetCode());
+            emit sig_logined(data->GetIp(), data->port, data->GetCode(), acountEdit_->text().toStdString());
             break;
         case ACCOUNT_NOT_FOUND:
             qWarning() << "[Login] failed: account does not exist, account =" << acountEdit_->text();

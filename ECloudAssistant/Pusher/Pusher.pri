@@ -4,6 +4,7 @@ INCLUDEPATH += $$PWD \
 
 HEADERS += \
     $$PWD/RtmpPushManager.h \
+    $$PWD/VideoPipelineStats.h \
     $$PWD/capture/AudioBuffer.h \
     $$PWD/capture/AudioCapture.h \
     $$PWD/capture/GDISreenScapture.h \
@@ -18,6 +19,7 @@ HEADERS += \
 
 SOURCES += \
     $$PWD/RtmpPushManager.cpp \
+    $$PWD/VideoPipelineStats.cpp \
     $$PWD/capture/AudioCapture.cpp \
     $$PWD/capture/GDISreenScapture.cpp \
     $$PWD/capture/WASAPICapture.cpp \

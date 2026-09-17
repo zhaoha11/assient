@@ -4,6 +4,7 @@ INCLUDEPATH += $$PWD/title \
                $$PWD/tool
 
 HEADERS += \
+    $$PWD/center/DeviceListWgt.h \
     $$PWD/center/LoginWgt.h \
     $$PWD/center/RemoteManager.h \
     $$PWD/center/RemoteWgt.h \
@@ -16,6 +17,7 @@ HEADERS += \
     $$PWD/tool/defin.h
 
 SOURCES += \
+    $$PWD/center/DeviceListWgt.cpp \
     $$PWD/center/LoginWgt.cpp \
     $$PWD/center/RemoteManager.cpp \
     $$PWD/center/RemoteWgt.cpp \

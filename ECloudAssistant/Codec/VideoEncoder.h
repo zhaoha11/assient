@@ -13,11 +13,15 @@ public:
 public:
     virtual bool Open(AVConfig& video_config) override;
     virtual void Close()override;
-    virtual AVPacketPtr Encode(const quint8* data,quint32 width,quint32 height,quint32 data_size,quint64 pts = 0);
+    virtual AVPacketPtr Encode(const quint8* data,quint32 width,quint32 height,
+                               VideoEncodeTiming* timing = nullptr,quint64 pts = 0);
 private:
     qint64  pts_;
     quint32 width_;
     quint32 height_;
+    //上一次用于建立转换器的输入尺寸，与编码器尺寸无关（编码器尺寸可能被截成偶数）
+    quint32 sourceWidth_;
+    quint32 sourceHeight_;
     bool force_idr_;
     AVFramePtr  rgba_frame_;
     AVPacketPtr h264_packet_;

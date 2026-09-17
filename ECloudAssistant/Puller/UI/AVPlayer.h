@@ -13,6 +13,7 @@ public:
     ~AVPlayer();
     explicit AVPlayer(EventLoop* loop,QWidget* parent = nullptr);
     bool Connect(QString ip,uint16_t port,QString code);
+    void StopRemote();
 signals:
     void sig_repaint(AVFramePtr frame);
 protected:

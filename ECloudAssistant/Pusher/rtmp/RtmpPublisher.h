@@ -16,6 +16,7 @@ public:
     int  PushAudioFrame(uint8_t *data, uint32_t size);
     void Close();
     bool IsConnected();
+    bool IsPublishing();
 private:
     RtmpPublisher(EventLoop *event_loop);
     bool IsKeyFrame(uint8_t* data, uint32_t size);

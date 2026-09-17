@@ -1,5 +1,6 @@
-﻿#ifndef REMOTEMANAGER_H
+#ifndef REMOTEMANAGER_H
 #define REMOTEMANAGER_H
+#include <functional>
 #include "RtmpPushManager.h"
 #include "PullerWgt.h"
 #include "SigConnection.h"
@@ -8,6 +9,7 @@
 class RemoteManager : public RtmpPushManager
 {
 public:
+    using DeviceStatusCallback = std::function<void(const QString &, const QString &, const QString &)>;
     ~RemoteManager();
     RemoteManager();
     RemoteManager(RemoteManager &&) = delete;
@@ -15,7 +17,7 @@ public:
     RemoteManager &operator=(RemoteManager &&) = delete;
     RemoteManager &operator=(const RemoteManager &) = delete;
 public:
-    void Init(const QString& sigIp,uint16_t port,const QString& code);
+   void Init(const QString& sigIp,uint16_t port,const QString& code,const DeviceStatusCallback& statusCallback = {});
     void StartRemote(const QString& sigIp,uint16_t port,const QString& code);
 protected:
     void HandleStopStream();

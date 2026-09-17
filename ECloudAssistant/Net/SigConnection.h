@@ -1,4 +1,4 @@
-﻿#ifndef SIGCONNECTION_H
+#ifndef SIGCONNECTION_H
 #define SIGCONNECTION_H
 #include<functional>
 #include "BufferReader.h"
@@ -31,8 +31,10 @@ public:
     inline bool isPusher(){return state_ == PUSHER;}
     inline bool isPuller(){return state_ == PULLER;}
     inline bool isNone(){return state_ == NONE;}
+    using JoinResultCallBack = std::function<void(bool)>;
     using StopStreamCallBack = std::function<void()>;
     using StartStreamCallBack = std::function<bool(const QString& streamAddr)>;
+    inline void SetJoinResultCallBack(const JoinResultCallBack& cb){joinResultCb_=cb;}
     inline void SetStartStreamCallBack(const StartStreamCallBack& cb){startStreamCb_ = cb;}
     inline void SetStopStreamCallBack(const StopStreamCallBack& cb){stopStreamCb_ = cb;}
 protected:
@@ -63,6 +65,7 @@ private:
     int joinRetryCount_ = 0;
     const UserType type_;
     QScreen* screen_ = nullptr;
+    JoinResultCallBack joinResultCb_=[](bool){};
     StopStreamCallBack stopStreamCb_ = [](){};
     StartStreamCallBack startStreamCb_ = [](const QString&)->bool{return true;};
     std::unique_ptr<std::thread> eventthread_ = nullptr;

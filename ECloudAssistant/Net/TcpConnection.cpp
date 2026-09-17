@@ -28,7 +28,7 @@ TcpConnection::~TcpConnection()
     int fd = channel_->GetSocket();
     if(fd > 0)
     {
-        ::close(fd);
+        ::closesocket(fd);
     }
 }
 

@@ -1,4 +1,4 @@
-﻿QWidget#Loginer,#RemoteWgt{
+QWidget#Loginer,#RemoteWgt{
 background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 rgba(251,102,102, 100), stop:1 rgba(20,196,188, 100));
 }
 
@@ -26,12 +26,12 @@ background-color: rgb(20,196,188);
 border: none;border-radius:5px;
 }
 
-QPushButton#login_Btn,#remoteBtn:hover
+QPushButton#login_Btn:hover,QPushButton#remoteBtn:hover
 {
 background-color: rgb(22,218,208);
 }
 
-QPushButton#login_Btn,#remoteBtn:pressed
+QPushButton#login_Btn:pressed,QPushButton#remoteBtn:pressed
 {
 background-color: rgb(17,171,164);
 }
@@ -99,3 +99,9 @@ color: rgb(0, 112, 249);
 QWidget#listWidget:focus{
 outline: none;
 }
+QWidget#DeviceListWgt{background-color:qlineargradient(spread:pad,x1:0,y1:0,x2:1,y2:1,stop:0 #3f2c49,stop:1 #193f46);}
+QLabel#devicePageTitle,QLabel#devicePageDescription,QLabel#deviceSummaryTitle,QLabel#deviceFieldLabel,QLabel#deviceFieldValue,QLabel#deviceCodeValue,QLabel#deviceHint{background:transparent;border:none;} QLabel#devicePageTitle{font:700 22pt "Microsoft YaHei";color:#fff;} QLabel#devicePageDescription{font:10pt "Microsoft YaHei";color:#d8e2e5;}
+QWidget#deviceEmptyState,QFrame#deviceSummary{background-color:rgba(255,255,255,22);border:1px solid rgba(255,255,255,44);border-radius:14px;}
+QLabel#emptyTitle,QLabel#deviceSummaryTitle{font:700 14pt "Microsoft YaHei";color:#fff;} QLabel#emptyDescription,QLabel#deviceHint{font:10pt "Microsoft YaHei";color:#d8e2e5;}
+QLabel#deviceStatus{min-width:48px;padding:5px 9px;font:700 9pt "Microsoft YaHei";color:#e3fff7;border-radius:10px;} QLabel#deviceStatus[tone="pending"]{background-color:#60728a;} QLabel#deviceStatus[tone="ready"]{background-color:#218b7e;} QLabel#deviceStatus[tone="error"]{background-color:#a4525b;}
+QLabel#deviceFieldLabel{font:10pt "Microsoft YaHei";color:#b9cbd0;} QLabel#deviceFieldValue,QLabel#deviceCodeValue{font:700 11pt "Microsoft YaHei";color:#fff;} QLabel#deviceCodeValue{color:#7cf4e5;}

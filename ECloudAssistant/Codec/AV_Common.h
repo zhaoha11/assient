@@ -14,6 +14,10 @@ extern "C" {
 using AVPacketPtr = std::shared_ptr<AVPacket>;
 using AVFramePtr  = std::shared_ptr<AVFrame>;
 
+//gdigrab 桌面采集的实际输出格式。采集缓冲池的行跨度和编码器入参都由它派生，
+//避免同一块内存在采集端与编码器之间出现两种格式口径。
+constexpr AVPixelFormat kCapturePixelFormat = AV_PIX_FMT_BGRA;
+
 typedef struct VIDEOCONFIG
 {
     quint32 width;
@@ -36,6 +40,13 @@ struct AVConfig
 {
     VideoConfig video;
     AudioConfig audio;
+};
+
+// 单帧编码路径的分段耗时，单位为微秒。阶段一低频统计使用，阶段三验收后移除。
+struct VideoEncodeTiming
+{
+    quint64 convertUs = 0;
+    quint64 encodeUs = 0;
 };
 
 struct AVContext

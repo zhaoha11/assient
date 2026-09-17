@@ -1,4 +1,4 @@
-﻿#include "SigConnection.h"
+#include "SigConnection.h"
 #include "defin.h"
 #include <QDebug>
 #include <QUuid>
@@ -75,7 +75,7 @@ bool SigConnection::OnRead(BufferReader &buffer)
 
 void SigConnection::OnClose()
 {
-    quit_ = true;
+    quit_ = true; if(type_==CONTROLLED && state_!=NONE) joinResultCb_(false);
 }
 
 void SigConnection::HandleMessage(BufferReader &buffer)
@@ -173,7 +173,7 @@ void SigConnection::doJoin(const packet_head* data)
     if(reply->result == S_OK)
     {
         //更新状态
-        state_ = IDLE;
+        state_ = IDLE; if(type_==CONTROLLED) joinResultCb_(true);
         if(type_ == CONTROLLING)
         {
             //控制端开始申请流
@@ -199,7 +199,7 @@ void SigConnection::doJoin(const packet_head* data)
         return;
     }
 
-    qWarning() << "[Sig] JOIN failed, joinCode =" << joinCode_;
+    qWarning() << "[Sig] JOIN failed, joinCode =" << joinCode_; if(type_==CONTROLLED) joinResultCb_(false);
     return;
 
 }
@@ -236,6 +236,7 @@ void SigConnection::doPlayStream(const packet_head* data)
         }
         else
         {
+            qWarning() << "[TRACE-PLAY-20260814] PLAYSTREAM rejected, result =" << playStream->result << "address =" << playStream->GetstreamAddres().c_str();
             qDebug() << "播放流失败";
         }
     }
@@ -250,11 +251,14 @@ void SigConnection::doCtreatStream(const packet_head* data)
         CreateStreamReply_body reply;
         //准备一个流地址
         QString streamAddr = "rtmp://192.168.3.130:1935/live/" + QString::number(++streamIndex);
+        qInfo() << "[TRACE-PLAY-20260814] CREATESTREAM received, url =" << streamAddr;
         //开始推流
         if(startStreamCb_)
         {
             //传到外部，由这个推流器开始推流 ,是否推流成功
-            if(startStreamCb_(streamAddr))
+            const bool pushOpened = startStreamCb_(streamAddr);
+            qInfo() << "[TRACE-PLAY-20260814] controlled Open result =" << pushOpened;
+            if(pushOpened)
             {
                 //推流成功
                 reply.SetstreamAddres(streamAddr.toStdString());
@@ -267,6 +271,7 @@ void SigConnection::doCtreatStream(const packet_head* data)
             else
             {
                 //推流失败
+                qWarning() << "[TRACE-PLAY-20260814] controlled push setup failed, replying CREATESTREAM ERROR";
                 qDebug() << "streamaddr failed: ";
                 reply.SetCode(SERVER_ERROR);
                 this->Send((const char*)&reply,reply.len);
@@ -279,13 +284,15 @@ void SigConnection::doDeleteStream(const packet_head* data)
 {
     //删除流 如果推流端发现这个拉流数量为0,我们就需要停止推流，如果有一个或者多个拉流端就需要继续推流‘
     DeleteStream_body* body = (DeleteStream_body*)data;
-    if(body->streamCount == 0)
+    if(body->streamCount == 0 && type_ == CONTROLLED)
     {
         //停止推流
         if(stopStreamCb_)
         {
             stopStreamCb_();
         }
+        state_ = IDLE;
+        qInfo() << "[Sig] controlled stream stopped, state = IDLE";
     }
 }
 

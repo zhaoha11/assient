@@ -1,4 +1,4 @@
-﻿#include "H264_Decoder.h"
+#include "H264_Decoder.h"
 #include "VideoConvert.h"
 #include<thread>
 H264_Decoder::H264_Decoder(AVContext *ac, QObject *parent)
@@ -79,6 +79,7 @@ void H264_Decoder::run()
 {
     //解码线程
     AVPacketPtr pkt = nullptr;
+    bool loggedFirstFrame = false;
     while(!quit_ && videoConver_)
     {
         if(!video_queue_.size())
@@ -108,6 +109,11 @@ void H264_Decoder::run()
             {
                 if(outFrame)
                 {
+                    if(!loggedFirstFrame)
+                    {
+                        qInfo() << "[TRACE-PULL-20260814] decoded first video frame" << outFrame->width << "x" << outFrame->height;
+                        loggedFirstFrame = true;
+                    }
                     //添加这个帧到帧队列
                     avContext_->video_queue_.push(outFrame);
                 }

@@ -11,8 +11,8 @@ public:
     SelectTaskScheduler(int id = 0);
     virtual ~SelectTaskScheduler();
 
-    void UpdateChannel(ChannelPtr channel);
-    void RemoveChannel(ChannelPtr& channel);
+    void UpdateChannel(ChannelPtr channel) override;
+    void RmoveChannel(ChannelPtr& channel) override;
     bool HandleEvent();
 private:
     fd_set fd_read_backup_;

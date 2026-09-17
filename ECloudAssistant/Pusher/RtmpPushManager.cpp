@@ -1,5 +1,6 @@
 ﻿#include "RtmpPushManager.h"
 #include "GDISreenScapture.h"
+#include <chrono>
 #include "AAC_Encoder.h"
 #include "H264Encoder.h"
 #include "AudioCapture.h"
@@ -22,19 +23,45 @@ RtmpPushManager::RtmpPushManager()
 
 bool RtmpPushManager::Open(const QString &str)
 {
+    exit_.store(false);
+    isConnect.store(false);
     if(!Init())
     {
         return false;
     }
     //通过推流器打开这个url
-    if(pusher_->OpenUrl(str.toStdString(),1000) < 0) //解析url失败
+    const int openUrlResult = pusher_->OpenUrl(str.toStdString(),1000);
+    qInfo() << "[TRACE-PLAY-20260814] OpenUrl result =" << openUrlResult << "url =" << str;
+    if(openUrlResult < 0) //解析url失败
     {
+        Close();
         return false;
     }
 
-    isConnect = true;
+    constexpr int publishTimeoutMs = 5000;
+    constexpr int checkIntervalMs = 10;
+    int waitedMs = 0;
+    while(!pusher_->IsPublishing())
+    {
+        if(!pusher_->IsConnected())
+        {
+            qWarning() << "RTMP disconnected before publish";
+            Close();
+            return false;
+        }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(3* 1000));
+        if(waitedMs >= publishTimeoutMs)
+        {
+            qWarning() << "RTMP publish timeout";
+            Close();
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(checkIntervalMs));
+        waitedMs += checkIntervalMs;
+    }
+
+    isConnect.store(true);
 
     //开始采集视频
     videoCaptureThread_.reset(new std::thread([this](){
@@ -56,6 +83,7 @@ bool RtmpPushManager::Init()
 
     //创建视频采集
     //准备“原始画面来源”和“压缩器”。
+    qInfo() << "[TRACE-PLAY-20260814] Init stage=screen-capture";
     screen_Capture_.reset(new GDIScreenCapture()); //采集器采集的像素要跟这个编码器初始化一致
     if(!screen_Capture_->Init())
     {
@@ -63,18 +91,29 @@ bool RtmpPushManager::Init()
     }
 
     //视频编码
+    const quint32 captureWidth = screen_Capture_->GetWidth();
+    const quint32 captureHeight = screen_Capture_->GetHeight();
+    const qint32 encodeWidth = static_cast<qint32>(captureWidth & ~1U);
+    const qint32 encodeHeight = static_cast<qint32>(captureHeight & ~1U);
+    if(encodeWidth <= 0 || encodeHeight <= 0)
+    {
+        qWarning() << "invalid capture size" << captureWidth << "x" << captureHeight;
+        return false;
+    }
+    qInfo() << "[TRACE-PLAY-20260814] Init stage=h264" << encodeWidth << "x" << encodeHeight;
     h264_encoder_.reset(new H264Encoder());
-    if(!h264_encoder_->OPen(2560,1440,30,80000,AV_PIX_FMT_BGRA))//这个分辨率大家要根据自己电脑来设置
+    if(!h264_encoder_->OPen(encodeWidth,encodeHeight,30,80000,kCapturePixelFormat))
     {
         return false;
     }
-    //音频采集
+    qInfo() << "[TRACE-PLAY-20260814] Init stage=audio-capture";
     audio_Capture_.reset(new AudioCapture());
     if(!audio_Capture_->Init())
     {
         return false;
     }
     //音频编码
+    qInfo() << "[TRACE-PLAY-20260814] Init stage=aac-encoder";
     aac_encoder_.reset(new AACEncoder());
     //初始化
     if(!aac_encoder_->Open(audio_Capture_->GetSamplerate(),audio_Capture_->GetChannels(),AV_SAMPLE_FMT_S16,64))//48000 Hz、双声道、S16 的 PCM
@@ -87,6 +126,7 @@ bool RtmpPushManager::Init()
     int extradatdSize = 0;
 
     //获取H264编码参数
+    qInfo() << "[TRACE-PLAY-20260814] Init stage=h264-sequence-params";
     extradatdSize = h264_encoder_->GetSequenceParams(extradata,1024);
     if(extradatdSize <= 0)
     {
@@ -124,63 +164,72 @@ bool RtmpPushManager::Init()
 void RtmpPushManager::Close()
 {
     //释放资源
-    exit_ = true;//结束线程
-    isConnect = false;
-    if(pusher_ && pusher_->IsConnected())
+    exit_.store(true);//结束线程
+    isConnect.store(false);
+
+    //必须在 join 编码线程之前唤醒阻塞在条件变量上的它，否则这里会永久等待。
+    //此处不 join、不释放缓冲池，所以调用 Close() 的线程不会和采集线程相互等待。
+    if(screen_Capture_)
     {
-        pusher_->Close();
+        screen_Capture_->RequestStop();
+    }
+
+    StopEncoder();
+
+    if(pusher_)
+    {
+        if(pusher_->IsConnected())
+        {
+            pusher_->Close();
+        }
         pusher_.reset();
         pusher_ = nullptr;
     }
 
-    StopEncoder();
     StopCapture();
 
 }
 
 void RtmpPushManager::EncodeVideo()
 {
-    //我们控制发送速率 每一秒发送30张
-    static Timestamp timeStamp;
-    uint32_t fameRate = 30;
-    while(!exit_ && isConnect)
+    stats_.Reset();
+    //线程运行期间 screen_Capture_ 不会被 reset，取一次裸指针避免每轮判空
+    GDIScreenCapture* capture = screen_Capture_.get();
+    CaptureFrameView view;
+    //编码节拍完全由采集端的新帧通知驱动，这里不再有轮询和固定休眠
+    while(!exit_.load() && isConnect.load() && capture)
     {
-        uint32_t elapsed = timeStamp.Elapsed();
-        //获取延迟时间
-        uint32_t delay = fameRate;
-        if(elapsed > delay)
+        if(!capture->WaitLatestFrame(view))
         {
-            //重置延迟
-            delay = 0;
+            break;//采集已停止
         }
-        else
+        if(!h264_encoder_ || !pusher_)
         {
-            delay -= elapsed;
+            break;
         }
-        //休眠这个延迟时间
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-        //重新获取这个时间
-        timeStamp.Reset();
-        FrameContainer bgra_image;
-        uint32_t width = 0,height = 0;
-        //采集
-        if(screen_Capture_ && h264_encoder_ && pusher_)
+
+        //采集完成到编码开始的等待时间，三缓冲下就只剩条件变量的唤醒延迟
+        const quint64 waitUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - view.capturedAt).count();
+        //采集之后，我们需要编码
+        std::vector<quint8> out_frame;
+        VideoEncodeTiming timing;
+        if(h264_encoder_->Encode(view.data,view.width,view.height,out_frame,&timing) > 0)
         {
-            if(screen_Capture_->CaptureFrame(bgra_image,width,height))
+            //编码之后开始推送
+            if(out_frame.size() > 0)
             {
-                //采集之后，我们需要编码
-                FrameContainer out_frame;
-                if(h264_encoder_->Encode(&bgra_image[0],width,height,bgra_image.size(),out_frame) > 0)
-                {
-                    //编码之后开始推送
-                    if(out_frame.size() > 0)
-                    {
-                        PushVideo(&out_frame[0],out_frame.size());
-                    }
-                }
+                PushVideo(&out_frame[0],out_frame.size());
             }
+            stats_.OnFrameEncoded(view.sequence,waitUs,timing.convertUs,timing.encodeUs);
         }
+        //每秒汇总一次，采集帧数直接从采集端序号取，避免编码线程漏采帧被忽略
+        stats_.ReportIfDue(std::chrono::steady_clock::now(),capture->GetCaptureSequence());
     }
+    //退出时补一行日志，把「停滞」和「死锁」区分开。
+    //括号不能省：<< 优先级高于 ?:，否则整行会被当成条件表达式
+    qInfo() << "[PIPE-STATS] encode thread exit, captured ="
+            << (capture ? capture->GetCaptureSequence() : 0);
 }
 
 void RtmpPushManager::EncodeAudio()
@@ -189,7 +238,7 @@ void RtmpPushManager::EncodeAudio()
     std::shared_ptr<uint8_t> pcm_buffer(new uint8_t[48000 * 8],std::default_delete<uint8_t[]>());
     //获取样本数
     uint32_t frame_samples = aac_encoder_->GetFrames();
-    while(!exit_ && isConnect)
+    while(!exit_.load() && isConnect.load())
     {
         if(audio_Capture_->GetSamples() >= (int)frame_samples)
         {

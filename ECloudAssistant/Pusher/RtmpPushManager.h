@@ -1,9 +1,11 @@
 ﻿#ifndef RTMPPUSHMANAGER_H
 #define RTMPPUSHMANAGER_H
+#include <atomic>
 #include <thread>
 #include <memory>
 #include "RtmpPublisher.h"
 #include "H264Encoder.h"
+#include "VideoPipelineStats.h"
 #include <QObject>
 
 class AACEncoder;
@@ -17,7 +19,7 @@ public:
     RtmpPushManager();
 public:
     bool Open(const QString& str);
-    bool isClose(){return isConnect == false;}
+    bool isClose(){return !isConnect.load();}
 protected:
     bool Init();
     void Close();
@@ -29,8 +31,8 @@ protected:
     void PushVideo(const quint8* data, quint32 size);
     void PushAudio(const quint8* data, quint32 size);
 private:
-    bool exit_ = false;
-    bool isConnect = false;
+    std::atomic_bool exit_{false};
+    std::atomic_bool isConnect{false};
     EventLoop* loop_ = nullptr;
     std::unique_ptr<AACEncoder>  aac_encoder_;
     std::unique_ptr<H264Encoder> h264_encoder_;
@@ -39,6 +41,8 @@ private:
     std::unique_ptr<GDIScreenCapture> screen_Capture_;
     std::unique_ptr<std::thread>  audioCaptureThread_ = nullptr;
     std::unique_ptr<std::thread>  videoCaptureThread_ = nullptr;
+    //只在视频编码线程使用
+    VideoPipelineStats stats_;
 };
 
 #endif // RTMPPUSHMANAGER_H

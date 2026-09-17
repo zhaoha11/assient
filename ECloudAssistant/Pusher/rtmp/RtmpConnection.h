@@ -5,6 +5,7 @@
 #include "rtmp.h"
 #include "RtmpChunk.h"
 #include "RtmpHandshake.h"
+#include <atomic>
 
 class RtmpPublisher;
 enum ConnectionState
@@ -25,6 +26,7 @@ public:
 
     bool OnRead(BufferReader& buffer);
     void OnClose();
+    bool IsPublishing() const{return is_publishing_.load();}
 
     bool HandleChunk(BufferReader& buffer);
     bool HandleMessage(RtmpMessage& rtmp_msg);
@@ -59,7 +61,7 @@ private:
     uint32_t avc_sequence_header_size_ = 0;
     uint32_t aac_sequence_header_size_ = 0;
 
-    bool is_publishing_ = false;
+    std::atomic_bool is_publishing_{false};
     bool has_key_frame_ = false;
 
     ConnectionState state_;

@@ -14,7 +14,8 @@ public:
 public:
     bool OPen(qint32 width,qint32 height,qint32 framerate,qint32 bitrate,qint32 format);
     void Close();
-    qint32 Encode(quint8* rgba_buffer,quint32 width,quint32 height,quint32 size,std::vector<quint8>& out_frame);
+    qint32 Encode(const quint8* rgba_buffer,quint32 width,quint32 height,std::vector<quint8>& out_frame,
+                  VideoEncodeTiming* timing = nullptr);
     qint32 GetSequenceParams(quint8* out_buffer, qint32 out_buffer_size);
 private:
     bool IsKeyFrame(AVPacketPtr pkt);

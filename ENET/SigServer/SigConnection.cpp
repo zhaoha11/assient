@@ -24,7 +24,7 @@ SigConnection::~SigConnection()
 
 void SigConnection::DisConnected()
 {
-    printf("disConnect");
+    printf("客户端disConnect\n");
     Clear();
 }
 
@@ -104,6 +104,10 @@ void SigConnection::HandleMessage(BufferReader &buffer)
 
 void SigConnection::Clear()
 {
+    if(state_ == CLOSE)
+    {
+        return;
+    }
     state_ = CLOSE;
     conn_ = nullptr;
     DeleteStream_body body; //需要通知所有关心者这个删除流通知
@@ -267,7 +271,7 @@ void SigConnection::DoCreateStream(const packet_head *data)
 {
     PlayStream_body body;
     CreateStreamReply_body* reply = (CreateStreamReply_body*)data;
-    printf("body size: %d,streamaddr: %s\n",reply->len,reply->GetstreamAddres().c_str());
+    printf("[TRACE-PLAY-20260814] CREATESTREAM reply: result=%d len=%d address=%s\n", reply->result, reply->len, reply->GetstreamAddres().c_str());
     streamAddres_ = reply->GetstreamAddres();
     //判断所有连接的状态 ,如果连接器状态十空闲，我们就去回应
     for(auto idefy : objectes_)
@@ -279,7 +283,7 @@ void SigConnection::DoCreateStream(const packet_head *data)
             continue;
         }
         auto con = std::dynamic_pointer_cast<SigConnection>(conn);
-        if(streamAddres_.empty())//流地址异常
+        if(reply->result != SUCCESSFUL || streamAddres_.empty())//流地址异常
         {
             printf("流地址异常\n");
             con->state_ = IDLE;

@@ -75,6 +75,7 @@ bool RtmpConnection::OnRead(BufferReader &buffer)
 
 void RtmpConnection::OnClose()
 {
+    is_publishing_.store(false);
     this->DeleteStream();
 }
 
@@ -288,10 +289,12 @@ bool RtmpConnection::HandleOnStatus(RtmpMessage &rtmp_msg)
             if(status == "NetStream.Publish.Start")
             {
                 //更新当前推流状态
-                is_publishing_ = true;
+                is_publishing_.store(true);
+                qInfo() << "[TRACE-PLAY-20260814] RTMP publish ready";
             }
             else
             {
+                is_publishing_.store(false);
                 ret = false;
             }
         }
@@ -410,5 +413,4 @@ void RtmpConnection::SendRtmpChunks(uint32_t csid, RtmpMessage &rtmp_msg)
         this->Send(buffer.get(),size);
     }
 }
-
 

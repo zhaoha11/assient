@@ -1,4 +1,4 @@
-﻿#include "TcpSocket.h"
+#include "TcpSocket.h"
 #include "AVPlayer.h"
 #include "EventLoop.h"
 #include "SigConnection.h"
@@ -36,6 +36,9 @@ void AVPlayer::Init()
     avContext_ = new AVContext();
     //创建这个解封装器
     avDEMuxer_.reset(new AVDEMuxer(avContext_));
+    avDEMuxer_->SetStreamCallBack([](bool opened){
+        qInfo() << "[TRACE-PULL-20260814] demux stream setup" << (opened ? "succeeded" : "failed");
+    });
     //初始化这个音频播放器
     this->InitAudio(2,44100,16);
     //绑定信号与槽 去播放视频
@@ -89,6 +92,16 @@ bool AVPlayer::Connect(QString ip, uint16_t port, QString code)
         return false;
     }
     return true;
+}
+
+void AVPlayer::StopRemote()
+{
+    Close();
+    if(sig_conn_)
+    {
+        sig_conn_->DisConnect();
+        sig_conn_.reset();
+    }
 }
 
 void AVPlayer::audioPlay()
@@ -221,7 +234,12 @@ void AVPlayer::HandleStopStream()
 bool AVPlayer::HandleStartStream(const QString &streamAddr)
 {
     //开始拉流
-    avDEMuxer_->Open(streamAddr.toStdString());
+    qInfo() << "[TRACE-PULL-20260814] start pull" << streamAddr;
+    if(!avDEMuxer_->Open(streamAddr.toStdString()))
+    {
+        qWarning() << "[TRACE-PULL-20260814] failed to start demux thread";
+        return false;
+    }
 
     //开始启动线程
     audioThread_.reset(new std::thread([this](){

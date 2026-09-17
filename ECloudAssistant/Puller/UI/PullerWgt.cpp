@@ -1,4 +1,5 @@
-﻿#include "PullerWgt.h"
+#include "PullerWgt.h"
+#include <QCloseEvent>
 #include <QResizeEvent>
 #include <QVBoxLayout>
 
@@ -14,18 +15,28 @@ PullerWgt::PullerWgt(EventLoop* loop,QWidget *parent)
     //设置窗口背景
     setStyleSheet("background-color:#121212");
 
-    player_.reset(new AVPlayer(loop,this));
+    auto* central = new QWidget(this);
+    player_.reset(new AVPlayer(loop,central));
     //布局
-    QVBoxLayout* layout = new QVBoxLayout(this);
+    QVBoxLayout* layout = new QVBoxLayout(central);
     layout->addWidget(player_.get());
     layout->setSpacing(0);
     layout->setContentsMargins(0,0,0,0);
-    this->setLayout(layout);
+    setCentralWidget(central);
 }
 
 bool PullerWgt::Connect(QString ip, uint16_t port, QString code)
 {
     return player_->Connect(ip,port,code);
+}
+
+void PullerWgt::closeEvent(QCloseEvent *event)
+{
+    if(player_)
+    {
+        player_->StopRemote();
+    }
+    QMainWindow::closeEvent(event);
 }
 
 void PullerWgt::resizeEvent(QResizeEvent *event)
@@ -34,4 +45,3 @@ void PullerWgt::resizeEvent(QResizeEvent *event)
     player_->resize(event->size());
     QMainWindow::resizeEvent(event);
 }
-

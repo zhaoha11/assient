@@ -1,4 +1,4 @@
-﻿#include "AVDEMuxer.h"
+#include "AVDEMuxer.h"
 #include "H264_Decoder.h"
 #include "AAC_Decoder.h"
 
@@ -128,56 +128,56 @@ void AVDEMuxer::FetchStream(const std::string &path)
 
 bool AVDEMuxer::FetchStreamInfo(const std::string &path)
 {
-    //获取流信息
-    if(avformat_open_input(&pFormateCtx_,path.c_str(),nullptr,&avDict_) != 0)
+    qInfo() << "[TRACE-PULL-20260814] avformat_open_input" << path.c_str();
+    const int openResult = avformat_open_input(&pFormateCtx_,path.c_str(),nullptr,&avDict_);
+    if(openResult != 0)
     {
+        qWarning() << "[TRACE-PULL-20260814] avformat_open_input failed" << openResult;
         return false;
     }
-    //查询流信息
-    if(avformat_find_stream_info(pFormateCtx_,nullptr) < 0)//查询失败
+
+    const int streamInfoResult = avformat_find_stream_info(pFormateCtx_,nullptr);
+    if(streamInfoResult < 0)
     {
+        qWarning() << "[TRACE-PULL-20260814] avformat_find_stream_info failed" << streamInfoResult;
         return false;
     }
-    //遍历流
+
     for(int i = 0;i < pFormateCtx_->nb_streams;i++)
     {
         if(pFormateCtx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
         {
-            //更新视频流索引
             videoIndex = i;
-            //时长
             avContext_->videoDuration = pFormateCtx_->streams[i]->duration * av_q2d(pFormateCtx_->streams[i]->time_base);
         }
         else if(pFormateCtx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
         {
-            //更新视频流索引
             audioIndex = i;
-            //时长
             avContext_->audioDuration = pFormateCtx_->streams[i]->duration * av_q2d(pFormateCtx_->streams[i]->time_base);
         }
     }
 
-    if(videoIndex != -1) //存在视频流
+    if(videoIndex != -1)
     {
-        //初始化视频解码器
         if(h264Decoder_->Open(pFormateCtx_->streams[videoIndex]->codecpar) != 0)
         {
+            qWarning() << "[TRACE-PULL-20260814] h264 decoder open failed";
             h264Decoder_.reset();
-            h264Decoder_ = nullptr;
             return false;
         }
     }
-    if(audioIndex != -1) //存在音频
+    if(audioIndex != -1)
     {
-        //初始化音频解码器
         if(aacDecoder_->Open(pFormateCtx_->streams[audioIndex]->codecpar) != 0)
         {
+            qWarning() << "[TRACE-PULL-20260814] aac decoder open failed";
             aacDecoder_.reset();
-            aacDecoder_ = nullptr;
             return false;
         }
     }
-    return true;
+
+    qInfo() << "[TRACE-PULL-20260814] demux streams" << "video=" << videoIndex << "audio=" << audioIndex;
+    return videoIndex != -1;
 }
 
 double AVDEMuxer::audioDuration()

@@ -1,4 +1,4 @@
-﻿#include "RemoteWgt.h"
+#include "RemoteWgt.h"
 #include <QVBoxLayout>
 #include <QDebug>
 #include "StyleLoader.h"
@@ -49,6 +49,7 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     });
 }
 
+void RemoteWgt::setDeviceStatusCallback(DeviceStatusCallback callback){ deviceStatusCallback_ = std::move(callback); }
 void RemoteWgt::handleLogined(const std::string ip, uint16_t port, const std::string code)
 {
     if(code.empty())
@@ -61,5 +62,5 @@ void RemoteWgt::handleLogined(const std::string ip, uint16_t port, const std::st
     selfCodeEdit_->setText(userCode);
     ip_ = QString::fromStdString(ip);
     port_ = port;
-    manager_->Init(ip_, port_, userCode);
+    manager_->Init(ip_, port_, userCode, deviceStatusCallback_);
 }

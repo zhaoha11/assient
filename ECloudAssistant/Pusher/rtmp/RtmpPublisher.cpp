@@ -1,4 +1,4 @@
-﻿#include "RtmpPublisher.h"
+#include "RtmpPublisher.h"
 
 std::shared_ptr<RtmpPublisher> RtmpPublisher::Create(EventLoop *loop)
 {
@@ -28,7 +28,7 @@ int RtmpPublisher::SetMediaInfo(MediaInfo media_info)
         {
             //更新这个编码参数大小，我们需要添加两个字节
             aac_sequence_header_size_ = media_info_.audio_specific_config_size + 2;
-            aac_sequence_header_.reset(new char[aac_sequence_header_size_]);
+            aac_sequence_header_.reset(new char[aac_sequence_header_size_],std::default_delete<char[]>());
             //填充字段
             uint8_t* data = (uint8_t*)aac_sequence_header_.get();
             //audio tag
@@ -144,7 +144,7 @@ int RtmpPublisher::PushVideoFrame(uint8_t *data, uint32_t size)
             {
                 has_key_frame_ = true;
                 rtmp_conn_->SendVideoData(0,avc_sequence_header_,avc_sequence_header_size_);
-                rtmp_conn_->SendVideoData(0,aac_sequence_header_,aac_sequence_header_size_);
+                rtmp_conn_->SendAudioData(0,aac_sequence_header_,aac_sequence_header_size_);
             }
             else
             {
@@ -178,6 +178,7 @@ int RtmpPublisher::PushVideoFrame(uint8_t *data, uint32_t size)
     index += size;
     playload_size = index;
     rtmp_conn_->SendVideoData(timestamp,playload,playload_size);
+    return 0;
 
 }
 
@@ -222,6 +223,15 @@ bool RtmpPublisher::IsConnected()
     return false;
 }
 
+bool RtmpPublisher::IsPublishing()
+{
+    if(rtmp_conn_)
+    {
+        return rtmp_conn_->IsPublishing();
+    }
+    return false;
+}
+
 bool RtmpPublisher::IsKeyFrame(uint8_t *data, uint32_t size)
 {
     //判断关键帧 startcode 3 4
@@ -243,4 +253,3 @@ bool RtmpPublisher::IsKeyFrame(uint8_t *data, uint32_t size)
     }
     return false;
 }
-
