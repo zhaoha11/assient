@@ -69,10 +69,7 @@ void RemoteManager::HandleStopStream()
 bool RemoteManager::HandleStartStream(const QString &streamAddr)
 {
     //开始推流
-    qInfo() << "[TRACE-PLAY-20260814] RemoteManager starts push, url =" << streamAddr;
-    qDebug() << "push: " << streamAddr;
     const bool opened = this->Open(streamAddr);
-    qInfo() << "[TRACE-PLAY-20260814] RtmpPushManager::Open returned" << opened;
     return opened;
 }
 

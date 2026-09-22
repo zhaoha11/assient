@@ -631,3 +631,203 @@ Remaining runtime checks: close and reconnect repeatedly, observe long-run CPU a
 Commit ID: this local commit; resolve with `git log -1 --oneline` after creation.
 
 Rollback point: revert the whole `git diff` across the five changed units above; nothing else is needed. No server, protocol or message-structure change is involved. The `VideoPipelineStats` module is untouched by this change and stays in place until phase 3 acceptance.
+
+## Unified 30 FPS target (low-latency phase 2.5)
+
+Goal: raise the whole capture-to-encode path from about 25 FPS to 30 FPS, as step two of phase 2.5 in `context/采集和编码的低延迟优化.md`. Only the framerate changes; bitrate, GOP, B-frames, resolution, the triple-buffer implementation and PTS behaviour are all deliberately left alone so the CPU, skip/dup and latency effects of the higher frame count can be read on their own.
+
+Affected files:
+
+- `ECloudAssistant/Codec/AV_Common.h`
+- `ECloudAssistant/Pusher/capture/GDISreenScapture.cpp`
+- `ECloudAssistant/Pusher/RtmpPushManager.cpp`
+
+Behavior: the encoder side was already configured for 30 FPS, so nothing about it needed changing — `RtmpPushManager::Init()` passed 30, and `VideoEncoder` sets `time_base = 1/30`, `framerate = 30/1`, `gop_size = 30` and `max_b_frames = 0`. The only thing capping the pipeline was the capture side: `GDIScreenCapture::framerate_` was 25 and feeds gdigrab's `framerate` option. Since phase two removed the encode thread's own polling clock, the encode rate has followed the arrival rate ever since, so lifting gdigrab to 30 lifts both ends together. A single `constexpr qint32 kTargetFramerate = 30` in `AV_Common.h` now supplies both the capture-side gdigrab rate and the framerate argument to `H264Encoder::OPen()`, which is the same single-source-of-truth treatment the pixel format already got via `kCapturePixelFormat`, and is what the document's section 7.1 asks for. The constant's comment notes that GOP is intentionally excluded, because `VideoEncoder` hardcodes `gop_size = 30` and it does not follow the framerate. `H264Encoder::OPen()` was already receiving 30, so the encoder's effective configuration is numerically unchanged.
+
+Verification: rebuilt with the Qt MinGW toolchain; the link succeeded, the executable timestamp advanced, and a follow-up `make` reported "Nothing to be done for 'first'". No new warnings.
+
+Runtime result: five reported periods averaged about 30.0 capture FPS and 30.0 encode FPS. All 153 frames stayed 1:1 with `dup = 0` and `skip = 0`. Average handoff wait was about 34 microseconds; maximum wait was normally below 0.1 ms with one 0.5 ms sample. BGRA-to-YUV conversion averaged about 6.93 ms and software H.264 encoding about 2.08 ms, for about 9.01 ms combined against the 33.3 ms frame budget. The phase 2.5 core pipeline result therefore passes.
+
+Remaining runtime checks: whole-machine CPU, actual bitrate, end-to-end visual latency, long-run stability, and repeated stop/reconnect behavior.
+
+Commit ID: not created in this change.
+
+Rollback point: restore `kTargetFramerate` to 25 in `AV_Common.h`, or revert the three files above. The 25 FPS baseline blocks in the document remain valid as the comparison arm. No server, protocol or message-structure change is involved.
+
+## 60 FPS stress test (low-latency phase 2.6)
+
+Goal: phase 2.6 in `context/采集和编码的低延迟优化.md` raises the whole path to 60 FPS to find the ceiling of the 1920x1080 software encode chain. The previously planned 30 FPS memory baseline was cancelled by user instruction; the test now goes directly to 60 FPS and judges sustainability primarily from actual capture rate, capture/encode 1:1 behavior, and `skip`.
+
+Affected files:
+
+- `ECloudAssistant/Codec/VideoEncoder.cpp`
+- `ECloudAssistant/Codec/AV_Common.h`
+- `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/Makefile{,.Debug,.Release}` (regenerated)
+
+Behavior: `kTargetFramerate` is now 60 and continues to drive both gdigrab capture and the encoder time base. `VideoEncoder::Open()` previously set `codecContext_->gop_size = 30` as a literal; it now reads `config_.video.gop`. `H264Encoder::OPen()` sets that field from the target framerate, so the 60 FPS run also uses GOP 60 and retains an approximately 1-second keyframe interval. Bitrate (80000, which `H264Encoder::OPen` scales to 80 Mbps), B-frames, resolution, PTS semantics and the triple-buffer implementation are untouched.
+
+Verification: after switching the target to 60, a full Debug rebuild with the Qt MinGW toolchain recompiled the `AV_Common.h` dependents and linked `debug/ECloudAssistant.exe` successfully. The reported warnings are pre-existing deprecation, signedness and unused-parameter warnings; no new build error was introduced.
+
+### Discovered: the generated Makefile had incomplete header dependencies
+
+While flipping `kTargetFramerate` to 60 to check the build, `RtmpPushManager.o` recompiled but `debug/GDISreenScapture.o` did not, even though `GDISreenScapture.cpp` includes `Codec/AV_Common.h` and reads the constant. The generated `Makefile.Debug` listed 62 object rules but only 27 of them had `Codec/AV_Common.h` as a prerequisite; the rule for `debug/GDISreenScapture.o` had been generated before phase 2 added that include.
+
+Because a `constexpr` is baked into each object at compile time, that produced a mixed binary — gdigrab still at 30 FPS while the encoder's `time_base` said 1/60. It built cleanly, linked, and carried a normal filename and timestamp, so it would have been run and produced meaningless framerate data. This is a live hazard for the phase 2.6 comparison and for any future single-constant experiment.
+
+Fixed by regenerating the makefiles in the standard layout from the build directory:
+
+```bash
+qmake.exe -o Makefile ..\..\ECloudAssistant.pro -spec win32-g++ CONFIG+=debug CONFIG+=qml_debug
+```
+
+`debug/GDISreenScapture.o`'s rule now lists `AV_Common.h`, and a rebuild recompiled that one file and relinked, confirming the fix. Two traps found along the way: `qmake_all` is an empty target in the sub-makefile and does nothing; and passing `-o Makefile.Debug` makes qmake treat that as the top-level makefile name, writing the real rules to `Makefile.Debug.Debug` and clobbering the working layout. Only command-line builds are affected — Qt Creator regenerates makefiles itself.
+
+Runtime result: five periods averaged about 40.1 capture FPS and 40.1 encode FPS although the source and encoder were configured for 60 FPS / GOP 60. All 202 frames stayed 1:1 with `dup = 0` and `skip = 0`. Average handoff wait was about 42 microseconds, maximum wait ranged from about 0.15 to 0.55 ms, BGRA-to-YUV conversion averaged about 6.71 ms, and software H.264 encoding about 2.11 ms, for about 8.81 ms combined.
+
+Conclusion: the 60 FPS target was not reached. Because capture itself stayed near 40 FPS while encode matched it exactly without skips, the observed limit is before the encode thread; the current measurements do not distinguish gdigrab, desktop capture, or OS scheduling as the specific cause. The triple-buffer handoff and encoder remained stable at the delivered rate.
+
+Commit ID: not created in this change.
+
+Rollback point: restore `kTargetFramerate` to 30 and, if required, revert `VideoEncoder.cpp`'s `gop_size` line to the literal `30`. The regenerated makefiles are build output and need no rollback.
+
+## 640x480 gdigrab area experiment (low-latency phase 2.7)
+
+Goal: distinguish pixel-volume cost from fixed per-frame cost after the 60 FPS / 1920x1080 run levelled off near 40 FPS.
+
+Affected files:
+
+- `ECloudAssistant/Codec/AV_Common.h`
+- `ECloudAssistant/Pusher/capture/GDISreenScapture.cpp`
+- `context/采集和编码的低延迟优化.md`
+
+Behavior: during the experiment, gdigrab captured a temporary 640x480 rectangle at the primary monitor's top-left corner and the encoder automatically opened at the same size. After collecting the result, the temporary rectangle was removed: capture once again uses the full primary-monitor rectangle, which is 1920x1080 on the test machine. `kTargetFramerate` was restored from 60 to 30, so capture, encoder time base and configured GOP are again unified at 30. Bitrate, PTS, triple buffering and thread behavior remain unchanged. The abandoned timing instrumentation is not present.
+
+Verification: the Qt MinGW Debug build recompiled the capture and related units and linked `debug/ECloudAssistant.exe` successfully. Only the two pre-existing `RtmpPushManager.cpp` signedness and unused-parameter warnings appeared. Across four complete runtime periods, capture and encode averaged about 54.8 FPS (51.0-56.8 FPS), and all 222 frames stayed 1:1 with `dup = 0` and `skip = 0`. Weighted averages were about 28 us handoff wait, 1.10 ms BGRA-to-YUV conversion and 0.52 ms H.264 encoding. The incomplete fifth line reported 55.3 FPS and was excluded from the averages.
+
+Conclusion: reducing the area from 1920x1080 to 640x480 raised throughput from about 40.1 to 54.8 FPS, a 36.5% increase. Pixel-volume work is therefore a material part of the limit, but not the only part because the small-area run still did not sustain 60 FPS. The encoder is not the limiting stage at the delivered rate; fixed GDI call cost, OS/VM scheduling, and same-machine contention remain possible contributors and are not distinguished by this experiment.
+
+Final disposition: the Qt MinGW Debug build after restoring full-primary-monitor capture and 30 FPS completed and linked `debug/ECloudAssistant.exe` successfully. The stable configuration is therefore the phase 2.5 setting: 1920x1080 on the current monitor, 30 FPS and GOP 30. Existing FFmpeg deprecation, signedness and unused-parameter warnings remain; no new build error was introduced.
+
+Commit ID: not created in this change.
+
+Remaining limitation: the restored binary has been built but not rerun end to end in this step. Phase 2.5 previously validated the same 1920x1080/30 FPS configuration.
+
+Rollback point: the temporary 640x480 experiment is intentionally not retained. Reproducing it requires setting the local capture dimensions back to 640x480 and the target framerate to 60.
+
+Documentation update: phase 2.7 now contains source-grounded tables for the restored video and audio settings. The important bitrate distinction is recorded explicitly: video passes 80000 kbps and stores 80,000,000 bit/s in FFmpeg, while the AAC path currently passes `64` straight into `AVCodecContext::bit_rate`, so its effective setting is 64 bit/s rather than the likely intended 64 kbps. This update documents the issue only and does not change encoder behavior.
+
+## AAC bitrate unit conversion
+
+Goal: make the existing `AACEncoder::Open(..., bitrate_kbps)` interface apply its documented kbps unit.
+
+Affected files: `ECloudAssistant/Codec/AAC_Encoder.cpp` and the phase 2.7 parameter table.
+
+Behavior: `bitrate_kbps` is multiplied by 1000 before reaching FFmpeg, so the existing caller value `64` now configures 64,000 bit/s instead of 64 bit/s. No video, capture, RTMP or thread setting changed.
+
+Verification: the Qt MinGW Debug build recompiled `AAC_Encoder.cpp` and linked `debug/ECloudAssistant.exe` successfully. Runtime confirmation should show that `[aac] Bitrate 64 is extremely low` no longer appears.
+
+Commit ID: not created in this change. Remaining limitation: runtime audio quality and warning removal have not yet been observed. Rollback point: remove the `* 1000` conversion in `AAC_Encoder.cpp`.
+
+Documentation plan: added low-latency phase 2.8 for a future H.264 compatibility change. The proposed target is 1920x1080 at 30 FPS, 12 Mbps, Baseline profile, Level 4.0, GOP 30 and no B-frames. No encoder code or runtime behavior was changed by this documentation-only update.
+
+## H.264 bitrate and Level compatibility convergence (low-latency phase 2.8)
+
+Goal: stop the encoder from being pushed to H.264 Level 5.0 by the 80 Mbps target, and pin the profile explicitly, so that hardware decoders that only accept lower levels can still play the stream. Resolution, framerate, GOP, PTS, capture and triple buffering are unchanged.
+
+Affected files: `ECloudAssistant/Pusher/RtmpPushManager.cpp` (video bitrate 80000 -> 12000 kbps), `ECloudAssistant/Codec/VideoEncoder.cpp` (`profile` and `level` set before `avcodec_open2`).
+
+Behavior: `H264Encoder::OPen` still multiplies the kbps argument by 1000, so `bit_rate`, `rc_min_rate`, `rc_max_rate` and `rc_buffer_size` all become 12,000,000 bit/s, keeping the one-second VBV duration. `codecContext_->profile` is `FF_PROFILE_H264_BASELINE` and `codecContext_->level` is 40 (Level 4.0). No other call site sets a video bitrate, and `MediaInfo` carries no bitrate field, so nothing on the signaling or RTMP path needed a change.
+
+Verification: the Qt MinGW Debug build recompiled exactly the two edited translation units and linked `debug/ECloudAssistant.exe`; `make -f Makefile.Debug -q` reports the tree up to date. Runtime logs now confirm `profile Constrained Baseline, level 4.0`, `bitrate=12000`, `vbv_maxrate=12000`, `vbv_bufsize=12000`, GOP 30 and no B-frames. Three complete pipeline periods totalled 92 captured and encoded frames at about 30.0 FPS with `dup = 0` and `skip = 0`; weighted averages were about 30 us handoff wait, 7.00 ms conversion and 2.42 ms encoding. The encode thread exited and the controlled side returned to `IDLE` normally. The short-run x264 summary reported about 12.53 Mbps.
+
+Two implementation details were checked against FFmpeg n6.0 `libavcodec/libx264.c` before writing the change. First, `FF_PROFILE_H264_CONSTRAINED_BASELINE` must not be used: the libx264 wrapper maps only `FF_PROFILE_H264_BASELINE`, `MAIN`, `HIGH`, `HIGH_10`, `HIGH_422` and `HIGH_444`, and Constrained Baseline falls through to an empty `default`, so the profile string is never set and the setting is silently ineffective. `FF_PROFILE_H264_BASELINE` combined with the existing `max_b_frames = 0` and `ultrafast` (which disables CABAC) still produces a Constrained Baseline bitstream, which is why the log string is expected to be unchanged and only the level differs. Second, Level 4.0 limits 1920x1080 to 30 FPS: `MaxMBPS` is 245760 and 120x68 = 8160 macroblocks per frame times 30 gives 244800, leaving 0.4% headroom, while `MaxFS`, `MaxBR` and `MaxCPB` are all satisfied. Raising the framerate above 30 would exceed the declared level, so the constant carries that note at its assignment site.
+
+Commit ID: not created in this change.
+
+Remaining limitation: the profile part is a pin rather than an observable change, because the previous parameter set already produced a Constrained Baseline bitstream; the real deltas are the bitrate and the level. Picture quality at 12 Mbps and actual hardware-decoder selection on the target device have not been observed yet, and the 16 Mbps fallback recorded in the phase plan has not been tried. The lower bitrate also removes an unrelated risk: 80 Mbps is close to the ceiling of a 100 Mbps LAN, so the change is expected to reduce serialization delay and congestion jitter at the same time.
+
+Rollback point: restore `12000` to `80000` in `RtmpPushManager.cpp` and delete the two `codecContext_->profile` / `codecContext_->level` assignments in `VideoEncoder.cpp`.
+
+## Profile switch from Baseline to Main (low-latency phase 2.8 revision)
+
+Goal: replace the declared H.264 profile with Main, which Level 4.0 decoders also support broadly and which permits CABAC.
+
+Affected file: `ECloudAssistant/Codec/VideoEncoder.cpp` only. `codecContext_->profile` is now `FF_PROFILE_H264_MAIN`; the bitrate, level, GOP, B-frame and preset/tune settings from the first phase 2.8 pass are unchanged.
+
+Behavior: no change to the coded bitstream beyond the SPS `profile_idc`, which moves from 66 to 77. The x264 preset in use (`ultrafast`) sets `b_cabac = 0`, `b_deblocking_filter = 0`, `b_transform_8x8 = 0`, `i_subpel_refine = 0`, `i_frame_reference = 1`, `analyse.inter = 0` and `i_aq_mode = 0`, so every tool that Main adds over Baseline is switched off anyway. The profile declaration therefore changes compatibility signalling, not picture quality or encode cost, and the earlier measured timings (7.00 ms convert plus 2.42 ms encode) are expected to carry over.
+
+Two related findings are recorded in the phase 2.8 document. First, if the objective is only compatibility, Constrained Baseline is the more conservative declaration, so declaring Main without enabling CABAC overstates capability instead of using it. Second, the quality lever is CABAC, not the profile name: there is no AVOption named `cabac` in the FFmpeg libx264 wrapper, CABAC is controlled by the `coder` option (`cavlc` / `ac`) or by passing `cabac=1` through `x264-params`, and a naive `av_opt_set(priv_data, "cabac", "1", 0)` fails on a missing option, which is the same class of silent failure as the unhandled `FF_PROFILE_H264_CONSTRAINED_BASELINE` case. Main is also the safer base for that later step, because if `x264_param_apply_profile` runs after the coder option, Baseline would force CABAC back off.
+
+Verification: the Qt MinGW Debug build recompiled `VideoEncoder.o` alone and linked `debug/ECloudAssistant.exe`. Runtime re-verification is outstanding: the encoder log should now read `Main` with Level 4.0, and capture/encode should remain at 30 FPS with 1:1 frames and `skip = 0`.
+
+Commit ID: not created in this change.
+
+Remaining limitation: the profile switch has not been run end to end, and hardware decode plus subjective quality at 12 Mbps are still unconfirmed. If quality proves insufficient, CABAC should be tried before raising the bitrate to 16 Mbps.
+
+Rollback point: set `codecContext_->profile` back to `FF_PROFILE_H264_BASELINE`, or delete the assignment to return to the encoder default of the previous phase.
+
+## Profile reverted to Baseline (low-latency phase 2.8 final state)
+
+Goal: settle the declared H.264 profile. Main was tried and then reverted, because the comparison preparation showed it changes nothing under the current preset.
+
+Affected file: `ECloudAssistant/Codec/VideoEncoder.cpp` only. `codecContext_->profile` is `FF_PROFILE_H264_BASELINE` again, with `level = 40` and the 12 Mbps bitrate unchanged. The code is now byte-for-byte the state that phase 2.8 already ran and measured, so no re-run is required to reuse those results.
+
+Behavior: the encoder log line stays `profile Constrained Baseline, level 4.0`. Keeping Baseline is the more conservative and more truthful declaration, because Main adds no capability that the `ultrafast` preset actually enables: x264 sets `b_cabac = 0`, `b_deblocking_filter = 0`, `b_transform_8x8 = 0`, `i_subpel_refine = 0`, `i_frame_reference = 1`, `analyse.inter = 0` and `i_aq_mode = 0` for that preset, so switching the declaration would only widen the advertised compatibility envelope from `profile_idc` 66 to 77.
+
+Verification: the Qt MinGW Debug build recompiled `VideoEncoder.o` alone and linked `debug/ECloudAssistant.exe`. The earlier phase 2.8 runtime results remain valid since the encoder configuration is unchanged.
+
+Commit ID: not created in this change.
+
+Remaining limitation: hardware decode on the target device and subjective quality at 12 Mbps are still unconfirmed. If quality turns out to be insufficient, the next single-variable step is CABAC rather than a higher bitrate, which requires naming the parameter through the `coder` option or `x264-params` because no AVOption called `cabac` exists, and would also require moving the profile to Main so that `x264_param_apply_profile` does not force CABAC back off.
+
+Rollback point: none needed; this change restores the previously verified state.
+
+## Phase 2 end-to-end latency baseline
+
+Goal: record the first-layer preview latency in the final phase 2 summary before phase 3 changes PTS behavior.
+
+Affected file: `context/采集和编码的低延迟优化.md` only; no source code changed.
+
+Verification: nine measurements ranged from 44 to 67 ms and averaged about 59.33 ms. Most samples were between 63 and 67 ms, for a 23 ms overall spread. One recorded pair was 22.554 s at the reference page and 22.491 s at the preview, which equals 63 ms.
+
+Commit ID: not created in this change. Remaining limitation: shutdown/reconnect repetition and long-duration stability remain supplementary phase 2 checks.
+
+## Phase 3 PTS semantics fix (low-latency phase 3)
+
+Goal: remove the unsigned optional-PTS sentinel that made every encoded frame carry PTS 0, and make the encoder PTS a required, caller-supplied, monotonic frame index derived from the capture sequence. No change to framerate, GOP, bitrate, encoder options or the RTMP send timestamps.
+
+Affected files: `ECloudAssistant/Pusher/RtmpPushManager.cpp` (`EncodeVideo` computes `framePts`), `ECloudAssistant/Codec/H264Encoder.{h,cpp}` (required `qint64 pts` before the optional `timing`), `ECloudAssistant/Codec/VideoEncoder.{h,cpp}` (required `qint64 pts`, `out_frame->pts = pts`, removed the `pts_` member), `ECloudAssistant/Codec/AudioEncoder.cpp` (removed one dead assignment).
+
+Behavior: `VideoEncoder::Encode` was declared `..., quint64 pts = 0` and assigned `out_frame->pts = pts >= 0 ? pts : pts_++`. An unsigned parameter is never negative, so the condition was always true and every frame received PTS 0 while `pts_++` never ran; `H264Encoder::Encode` did not expose a PTS argument at all, so callers could not supply one. The parameter is now a required `qint64` on both layers with no default, which closes the "caller forgets, encoder silently receives 0" path by construction. `framePts` is `view.sequence - firstSequence`, where `firstSequence` is latched from the first frame of each encode-thread run, so PTS starts at 0 on every (re)start rather than inheriting the previous stream's timeline. A capture-sequence difference is used instead of an encoded-frame counter so that when the encoder falls behind and stale frames are dropped, PTS jumps with the dropped frames and keeps pointing at the moment the picture actually occurred; with `time_base = 1/framerate` the difference is directly the frame interval. `force_idr_` was a member initialized in the constructor and referenced nowhere else, and the audio encoder had `in_frame->pts = pts_;` immediately overwritten by the `av_rescale_q` call on the next line; both were removed.
+
+Verification: the Qt MinGW Debug build recompiled exactly the four edited translation units (`VideoEncoder`, `H264Encoder`, `AudioEncoder`, `RtmpPushManager`) and linked `debug/ECloudAssistant.exe` with no new warnings. Runtime verification is outstanding and must not rely on the encoder start banner or on puller-side warnings. A temporary `[PTS-CHECK]` log in `H264Encoder::Encode` prints when input PTS is nonconsecutive or the output packet's PTS/DTS differs from input. Its static `lastPts = -1` means a normal first frame at PTS 0 is silent on a fresh process, while a restarted stream's first frame usually prints; packet duration is displayed but not checked. The remaining criteria are that stop and re-stream work normally and that the phase 2 end-to-end latency baseline (nine samples, 44-67 ms, about 59.33 ms mean) is not degraded. The temporary log is to be deleted after acceptance.
+
+Commit ID: not created in this change.
+
+Remaining limitation: the corrected PTS still does not reach RTMP. `AVPacket::pts/dts` are not forwarded and `RtmpPublisher` continues to timestamp both audio and video from its own single `Timestamp` instance, so no end-to-end latency change is expected from this change alone; and nothing under `Puller/` reads or validates timestamps, so the phase plan's "non-monotonic timestamp warning at the player" criterion is not observable with this project's own player and should be replaced by the `[PTS-CHECK]` log. The skipped-frame branch of the new PTS is also still unexercised, because every run so far has reported `skip = 0`. The encoder now consumes an explicit PTS but all PTS-dependent encoder features remain disabled by `ultrafast`/`zerolatency`/`max_b_frames = 0`, so the change is currently a semantics fix rather than a latency or quality improvement.
+
+Rollback point: restore the `quint64 pts = 0` default-argument form, the `pts_` member and the `pts >= 0 ? pts : pts_++` assignment in `VideoEncoder.{h,cpp}`, drop the `pts` argument from `H264Encoder::{h,cpp}` and from the `EncodeVideo` call site, and re-add `in_frame->pts = pts_;` in `AudioEncoder.cpp` if the original line is wanted for reference.
+
+## RTMP startup log cleanup
+
+Goal: reduce repetitive startup and handshake output while retaining the events needed to distinguish a publish timeout from a successful stream.
+
+Affected files: `ECloudAssistant/Net/SigConnection.cpp`, `ECloudAssistant/UI/center/RemoteManager.cpp`, `ECloudAssistant/Pusher/RtmpPushManager.cpp`, `ECloudAssistant/Pusher/rtmp/RtmpConnection.cpp`, and `ECloudAssistant/Pusher/capture/GDISreenScapture.cpp`.
+
+Behavior: removed dated `TRACE-PLAY` wrappers, duplicate callback-result and stream-address prints, intermediate RTMP handshake debug prints, five successful initialization-stage prints, and the redundant active-capture-size print. Kept one CREATESTREAM request, the primary capture geometry and decoded pixel format, RTMP publish-ready and stop events, pipeline statistics, and temporary PTS verification. Failure logs now identify the failed initialization stage; OpenUrl failure, pre-publish disconnect and five-second publish timeout retain the target URL; publish rejection includes the server status code. No protocol, startup ordering, timeout, or media behavior changed.
+
+Verification: Qt MinGW Debug rebuilt the five affected translation units and linked `debug/ECloudAssistant.exe` successfully. Only existing signedness, unused-parameter, initializer and member-order warnings appeared. `git diff --check` passed for the edited source files. Runtime publish/retry has not yet been rerun after this log-only change, and the reason for the observed first-attempt timeout remains undiagnosed.
+
+Commit ID: not created. Rollback point: restore only this entry's log statements in the five named files; retain the earlier PTS and pipeline edits.
+
+## Publish capture/encode/PTS update
+
+Goal: upload the current capture/encode and PTS changes to `https://github.com/zhaoha11/assient.git` with the Chinese commit message `优化采集编码pts`.
+
+Affected files: the ECloudAssistant capture, codec, RTMP startup and signaling source files listed in the preceding phase entries, plus this worklog and `context/采集和编码的低延迟优化.md`. The unrelated working-tree formatting change in `ENET/RtmpServer/RtmpConnection.cpp` and untracked personal/tool files are excluded.
+
+Behavior: the code retains the validated phase-2 triple-buffer/30 FPS/12 Mbps Baseline configuration and the phase-3 sequence-derived encoder PTS. This entry also corrects the documentation for the temporary PTS log's first-frame condition. No additional media behavior is changed for the upload.
+
+Verification: the Qt MinGW Debug build is up to date (`mingw32-make -q` returned 0), and `git diff --check` passed. The destination `main` initially pointed to `86c673ae19a48aae509d4be2127c8e441e91f52e` and has no shared history with local `main`; replacing it requires a lease-guarded update. Post-PTS latency remeasurement, repeated stream reconnect, and removal of temporary `[PTS-CHECK]` remain outstanding.
+
+Commit ID: this entry's containing commit (`git log -1 --oneline`); report its resolved hash after committing. Rollback point: the previous remote tip is `86c673ae19a48aae509d4be2127c8e441e91f52e`.

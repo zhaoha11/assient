@@ -103,7 +103,7 @@ AVPacketPtr AudioEncoder::Encode(const uint8_t *pcm, int samples)
     in_frame->channels = codecContext_->channels;
     in_frame->channel_layout = codecContext_->channel_layout;
     in_frame->nb_samples = samples;
-    in_frame->pts = pts_;
+    //先按采样率计数再换算到编码器时间基：直接赋 pts_ 会被这一行无条件覆盖
     in_frame->pts = av_rescale_q(pts_,{1,codecContext_->sample_rate},codecContext_->time_base);
     pts_ += in_frame->nb_samples;
 

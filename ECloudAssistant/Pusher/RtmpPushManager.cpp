@@ -31,9 +31,9 @@ bool RtmpPushManager::Open(const QString &str)
     }
     //通过推流器打开这个url
     const int openUrlResult = pusher_->OpenUrl(str.toStdString(),1000);
-    qInfo() << "[TRACE-PLAY-20260814] OpenUrl result =" << openUrlResult << "url =" << str;
     if(openUrlResult < 0) //解析url失败
     {
+        qWarning() << "RTMP OpenUrl failed, url =" << str;
         Close();
         return false;
     }
@@ -45,14 +45,14 @@ bool RtmpPushManager::Open(const QString &str)
     {
         if(!pusher_->IsConnected())
         {
-            qWarning() << "RTMP disconnected before publish";
+            qWarning() << "RTMP disconnected before publish, url =" << str;
             Close();
             return false;
         }
 
         if(waitedMs >= publishTimeoutMs)
         {
-            qWarning() << "RTMP publish timeout";
+            qWarning() << "RTMP publish timeout after" << publishTimeoutMs << "ms, url =" << str;
             Close();
             return false;
         }
@@ -83,10 +83,10 @@ bool RtmpPushManager::Init()
 
     //创建视频采集
     //准备“原始画面来源”和“压缩器”。
-    qInfo() << "[TRACE-PLAY-20260814] Init stage=screen-capture";
     screen_Capture_.reset(new GDIScreenCapture()); //采集器采集的像素要跟这个编码器初始化一致
     if(!screen_Capture_->Init())
     {
+        qWarning() << "screen capture init failed";
         return false;
     }
 
@@ -100,24 +100,24 @@ bool RtmpPushManager::Init()
         qWarning() << "invalid capture size" << captureWidth << "x" << captureHeight;
         return false;
     }
-    qInfo() << "[TRACE-PLAY-20260814] Init stage=h264" << encodeWidth << "x" << encodeHeight;
     h264_encoder_.reset(new H264Encoder());
-    if(!h264_encoder_->OPen(encodeWidth,encodeHeight,30,80000,kCapturePixelFormat))
+    if(!h264_encoder_->OPen(encodeWidth,encodeHeight,kTargetFramerate,12000,kCapturePixelFormat))//12000 kbps
     {
+        qWarning() << "H.264 encoder init failed" << encodeWidth << "x" << encodeHeight;
         return false;
     }
-    qInfo() << "[TRACE-PLAY-20260814] Init stage=audio-capture";
     audio_Capture_.reset(new AudioCapture());
     if(!audio_Capture_->Init())
     {
+        qWarning() << "audio capture init failed";
         return false;
     }
     //音频编码
-    qInfo() << "[TRACE-PLAY-20260814] Init stage=aac-encoder";
     aac_encoder_.reset(new AACEncoder());
     //初始化
     if(!aac_encoder_->Open(audio_Capture_->GetSamplerate(),audio_Capture_->GetChannels(),AV_SAMPLE_FMT_S16,64))//48000 Hz、双声道、S16 的 PCM
     {
+        qWarning() << "AAC encoder init failed";
         return false;
     }
     //获取音频视频编码参数
@@ -126,10 +126,10 @@ bool RtmpPushManager::Init()
     int extradatdSize = 0;
 
     //获取H264编码参数
-    qInfo() << "[TRACE-PLAY-20260814] Init stage=h264-sequence-params";
     extradatdSize = h264_encoder_->GetSequenceParams(extradata,1024);
     if(extradatdSize <= 0)
     {
+        qWarning() << "H.264 sequence parameters unavailable";
         return false;
     }
     //获取sps pps
@@ -196,6 +196,9 @@ void RtmpPushManager::EncodeVideo()
     //线程运行期间 screen_Capture_ 不会被 reset，取一次裸指针避免每轮判空
     GDIScreenCapture* capture = screen_Capture_.get();
     CaptureFrameView view;
+    //编码 PTS 以本次编码线程的首帧为原点，重新推流时自然从 0 重新对齐
+    quint64 firstSequence = 0;
+    bool hasFirstSequence = false;
     //编码节拍完全由采集端的新帧通知驱动，这里不再有轮询和固定休眠
     while(!exit_.load() && isConnect.load() && capture)
     {
@@ -208,13 +211,22 @@ void RtmpPushManager::EncodeVideo()
             break;
         }
 
+        //PTS 取采集序号差而非「已编码帧计数」：编码落后跳过采集帧时序号照样跳跃，
+        //时间戳才对应画面真实发生的时刻。编码器时间基是 1/帧率，序号差即帧间隔。
+        if(!hasFirstSequence)
+        {
+            firstSequence = view.sequence;
+            hasFirstSequence = true;
+        }
+        const qint64 framePts = static_cast<qint64>(view.sequence - firstSequence);
+
         //采集完成到编码开始的等待时间，三缓冲下就只剩条件变量的唤醒延迟
         const quint64 waitUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                    std::chrono::steady_clock::now() - view.capturedAt).count();
         //采集之后，我们需要编码
         std::vector<quint8> out_frame;
         VideoEncodeTiming timing;
-        if(h264_encoder_->Encode(view.data,view.width,view.height,out_frame,&timing) > 0)
+        if(h264_encoder_->Encode(view.data,view.width,view.height,framePts,out_frame,&timing) > 0)
         {
             //编码之后开始推送
             if(out_frame.size() > 0)

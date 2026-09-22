@@ -18,6 +18,10 @@ using AVFramePtr  = std::shared_ptr<AVFrame>;
 //避免同一块内存在采集端与编码器之间出现两种格式口径。
 constexpr AVPixelFormat kCapturePixelFormat = AV_PIX_FMT_BGRA;
 
+//采集与编码统一的目标帧率。采集端的 gdigrab framerate、编码器的 time_base
+//以及约 1 秒的 GOP 都由它派生，避免出现多套帧率口径。
+constexpr qint32 kTargetFramerate = 30;
+
 typedef struct VIDEOCONFIG
 {
     quint32 width;

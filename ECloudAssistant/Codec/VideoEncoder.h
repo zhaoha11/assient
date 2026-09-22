@@ -13,16 +13,16 @@ public:
 public:
     virtual bool Open(AVConfig& video_config) override;
     virtual void Close()override;
-    virtual AVPacketPtr Encode(const quint8* data,quint32 width,quint32 height,
-                               VideoEncodeTiming* timing = nullptr,quint64 pts = 0);
+    //pts 必须是显式传入的单调递增序号：编码器时间基为 1/帧率，序号差即帧间隔。
+    //不给默认值是为了杜绝「调用方漏传、编码器静默收到 0」这类无符号哨兵语义。
+    virtual AVPacketPtr Encode(const quint8* data,quint32 width,quint32 height,qint64 pts,
+                               VideoEncodeTiming* timing = nullptr);
 private:
-    qint64  pts_;
     quint32 width_;
     quint32 height_;
     //上一次用于建立转换器的输入尺寸，与编码器尺寸无关（编码器尺寸可能被截成偶数）
     quint32 sourceWidth_;
     quint32 sourceHeight_;
-    bool force_idr_;
     AVFramePtr  rgba_frame_;
     AVPacketPtr h264_packet_;
     std::unique_ptr<VideoConverter> converter_;

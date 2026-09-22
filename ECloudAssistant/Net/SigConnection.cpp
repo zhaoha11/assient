@@ -236,8 +236,7 @@ void SigConnection::doPlayStream(const packet_head* data)
         }
         else
         {
-            qWarning() << "[TRACE-PLAY-20260814] PLAYSTREAM rejected, result =" << playStream->result << "address =" << playStream->GetstreamAddres().c_str();
-            qDebug() << "播放流失败";
+            qWarning() << "PLAYSTREAM rejected, result =" << playStream->result << "address =" << playStream->GetstreamAddres().c_str();
         }
     }
 
@@ -251,28 +250,25 @@ void SigConnection::doCtreatStream(const packet_head* data)
         CreateStreamReply_body reply;
         //准备一个流地址
         QString streamAddr = "rtmp://192.168.3.130:1935/live/" + QString::number(++streamIndex);
-        qInfo() << "[TRACE-PLAY-20260814] CREATESTREAM received, url =" << streamAddr;
+        qInfo() << "CREATESTREAM received, url =" << streamAddr;
         //开始推流
         if(startStreamCb_)
         {
             //传到外部，由这个推流器开始推流 ,是否推流成功
             const bool pushOpened = startStreamCb_(streamAddr);
-            qInfo() << "[TRACE-PLAY-20260814] controlled Open result =" << pushOpened;
             if(pushOpened)
             {
                 //推流成功
                 reply.SetstreamAddres(streamAddr.toStdString());
                 reply.SetCode((ResultCode)0);
                 //发送
-                qDebug() << "streamaddr: " << reply.GetstreamAddres().c_str() << "len: " << reply.len;
                 this->Send((const char*)&reply,reply.len);
                 state_ = PUSHER;
             }
             else
             {
                 //推流失败
-                qWarning() << "[TRACE-PLAY-20260814] controlled push setup failed, replying CREATESTREAM ERROR";
-                qDebug() << "streamaddr failed: ";
+                qWarning() << "controlled push setup failed, replying CREATESTREAM ERROR";
                 reply.SetCode(SERVER_ERROR);
                 this->Send((const char*)&reply,reply.len);
             }

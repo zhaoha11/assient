@@ -23,7 +23,7 @@ bool AACEncoder::Open(int samplerate, int channels, int format, int bitrate_kbps
     AVConfig encoder_config;
     encoder_config.audio.samplerate = samplerate;
     encoder_config.audio.channels = channels;
-    encoder_config.audio.bitrate = bitrate_kbps;
+    encoder_config.audio.bitrate = bitrate_kbps * 1000;
     encoder_config.audio.format = (AVSampleFormat)format;
     //初始化这个编码器
     if(!AAC_encoder_->Open(encoder_config))

@@ -26,7 +26,7 @@ GDIScreenCapture::GDIScreenCapture()
     , height_(0)
     , capture_sequence_(0)
     , video_index_(-1)
-    , framerate_(25)
+    , framerate_(kTargetFramerate)
     , format_logged_(false)
     , mismatch_warned_(false)
     , input_format_(nullptr)
@@ -148,7 +148,6 @@ bool GDIScreenCapture::Init(qint64 display_index)
         Close();
         return false;
     }
-    qInfo() << "gdigrab active capture size" << width_ << "x" << height_;
 
     AVCodec* codec = const_cast<AVCodec*>(avcodec_find_decoder(format_context_->streams[videoIndex]->codecpar->codec_id));
     if(!codec)

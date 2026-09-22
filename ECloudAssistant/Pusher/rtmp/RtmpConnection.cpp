@@ -186,7 +186,6 @@ bool RtmpConnection::Connect()
     //更新状态
     state_ = START_CONNECT;
     SendInvokeMsg(RTMP_CHUNK_INVOKE_ID,amf_encoder_->data(),amf_encoder_->size());
-    qDebug() << "Connect";
     return true;
 }
 
@@ -202,13 +201,11 @@ bool RtmpConnection::CretaeStream()
     //更新状态
     state_ = START_CREATE_STREAM;
     SendInvokeMsg(RTMP_CHUNK_INVOKE_ID,amf_encoder_->data(),amf_encoder_->size());
-    qDebug() << "CretaeStream";
     return true;
 }
 
 bool RtmpConnection::Publish()
 {
-    qDebug() << "publis";
     //编码amf
     AmfObjects objects;
     amf_encoder_->reset();
@@ -246,7 +243,6 @@ bool RtmpConnection::HandleResult(RtmpMessage &rtmp_msg)
 {
     //处理结果 连接和创建流，服务器会返回这个result
     bool ret = true;
-    qDebug() << "HandleResult";
     if(state_ == START_CONNECT)
     {
         if(amf_decoder_->hasObject("code"))
@@ -254,7 +250,6 @@ bool RtmpConnection::HandleResult(RtmpMessage &rtmp_msg)
             AmfObject amfObj = amf_decoder_->getObject("code");
             if(amfObj.amf_string == "NetConnection.Connect.Success")
             {
-                qDebug() << "START_CONNECT";
                 CretaeStream();
                 ret = true;
             }
@@ -267,7 +262,6 @@ bool RtmpConnection::HandleResult(RtmpMessage &rtmp_msg)
             //更新流ID
             stream_id_ = (int)amf_decoder_->getNumber();
             //创建流成功，开始推流
-            qDebug() << "START_CREATE_STREAM";
             this->Publish();
             ret = true;
         }
@@ -290,10 +284,11 @@ bool RtmpConnection::HandleOnStatus(RtmpMessage &rtmp_msg)
             {
                 //更新当前推流状态
                 is_publishing_.store(true);
-                qInfo() << "[TRACE-PLAY-20260814] RTMP publish ready";
+                qInfo() << "RTMP publish ready";
             }
             else
             {
+                qWarning() << "RTMP publish rejected, status =" << status.c_str();
                 is_publishing_.store(false);
                 ret = false;
             }
@@ -413,4 +408,3 @@ void RtmpConnection::SendRtmpChunks(uint32_t csid, RtmpMessage &rtmp_msg)
         this->Send(buffer.get(),size);
     }
 }
-

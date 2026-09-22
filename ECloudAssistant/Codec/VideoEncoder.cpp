@@ -10,12 +10,10 @@ extern "C"
 }
 
 VideoEncoder::VideoEncoder()
-    :pts_(0)
-    ,width_(0)
+    :width_(0)
     ,height_(0)
     ,sourceWidth_(0)
     ,sourceHeight_(0)
-    ,force_idr_(false)
     ,rgba_frame_(nullptr)
     ,h264_packet_(nullptr)
     ,converter_(nullptr)
@@ -61,9 +59,17 @@ bool VideoEncoder::Open(AVConfig &video_config)
     codecContext_->height = config_.video.height;
     codecContext_->time_base = {1,(qint32)config_.video.framerate};//帧率倒数
     codecContext_->framerate = {(qint32)config_.video.framerate,1};
-    codecContext_->gop_size = 30;   //gop设置跟帧率，帧率倍速，gop越小，I帧越多，导致编码率降低，传输带宽增大 25 一阵 40ms
+    //gop_size 是帧数不是秒数：只有由帧率派生，关键帧间隔才会稳定在约 1 秒，
+    //否则改帧率会无声地改变 I 帧的时间间隔
+    codecContext_->gop_size = config_.video.gop;
     codecContext_->max_b_frames = 0;//降低延迟
     codecContext_->pix_fmt = AV_PIX_FMT_YUV420P;
+    //必须写 BASELINE：libx264 不映射 FF_PROFILE_H264_CONSTRAINED_BASELINE，
+    //写后者会落到 default 分支被静默忽略，编码器仍按自己的默认档位输出
+    codecContext_->profile = FF_PROFILE_H264_BASELINE;
+    //Level 4.0 对 1080p 只支持到 30 FPS（8160 宏块 × 30 = 244800，上限 245760），
+    //提高帧率必须同步提高 level，否则码流会超出所声明的等级
+    codecContext_->level = 40;
     codecContext_->bit_rate = config_.video.bitrate;
     //还需要设置全局头
     codecContext_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -95,7 +101,6 @@ void VideoEncoder::Close()
     height_ = 0;
     sourceWidth_ = 0;
     sourceHeight_ = 0;
-    pts_ = 0;
     is_initialzed_ = false;
     if(converter_)
     {
@@ -106,7 +111,7 @@ void VideoEncoder::Close()
 }
 
 AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 height,
-                                 VideoEncodeTiming* timing, quint64 pts)
+                                 qint64 pts, VideoEncodeTiming* timing)
 {
     //开始编码
     if(!is_initialzed_)
@@ -176,7 +181,7 @@ AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 heig
     }
 
     //更新out_frame参数
-    out_frame->pts = pts >= 0 ? pts : pts_++;
+    out_frame->pts = pts;
     out_frame->pict_type = AV_PICTURE_TYPE_NONE;
 
     const std::chrono::steady_clock::time_point encodeBegin = std::chrono::steady_clock::now();

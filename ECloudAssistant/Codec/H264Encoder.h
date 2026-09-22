@@ -14,8 +14,9 @@ public:
 public:
     bool OPen(qint32 width,qint32 height,qint32 framerate,qint32 bitrate,qint32 format);
     void Close();
-    qint32 Encode(const quint8* rgba_buffer,quint32 width,quint32 height,std::vector<quint8>& out_frame,
-                  VideoEncodeTiming* timing = nullptr);
+    //pts 为必传的单调递增帧序号，沿调用链原样交给编码器，不做换算
+    qint32 Encode(const quint8* rgba_buffer,quint32 width,quint32 height,qint64 pts,
+                  std::vector<quint8>& out_frame,VideoEncodeTiming* timing = nullptr);
     qint32 GetSequenceParams(quint8* out_buffer, qint32 out_buffer_size);
 private:
     bool IsKeyFrame(AVPacketPtr pkt);
