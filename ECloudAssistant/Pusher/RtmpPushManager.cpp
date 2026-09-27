@@ -349,15 +349,11 @@ bool RtmpPushManager::IsKeyFrame(const uint8_t *data, uint32_t size)
 void RtmpPushManager::PushVideo(const quint8 *data, quint32 size)
 {
     //推送视频
-    //准备buffer size = video size - 4 //startcode
-    std::shared_ptr<uint8_t> frame(new uint8_t[size - 4],std::default_delete<uint8_t[]>());
-    //拷贝数据
-    memcpy(frame.get(),data + 4,size - 4);
     if(size > 0)
     {
         if(pusher_ && pusher_->IsConnected())
         {
-            pusher_->PushVideoFrame(frame.get(),size - 4);
+            pusher_->PushVideoFrame(data,size);
         }
     }
 

@@ -831,3 +831,99 @@ Behavior: the code retains the validated phase-2 triple-buffer/30 FPS/12 Mbps Ba
 Verification: the Qt MinGW Debug build is up to date (`mingw32-make -q` returned 0), and `git diff --check` passed. The destination `main` initially pointed to `86c673ae19a48aae509d4be2127c8e441e91f52e` and has no shared history with local `main`; replacing it requires a lease-guarded update. Post-PTS latency remeasurement, repeated stream reconnect, and removal of temporary `[PTS-CHECK]` remain outstanding.
 
 Commit ID: this entry's containing commit (`git log -1 --oneline`); report its resolved hash after committing. Rollback point: the previous remote tip is `86c673ae19a48aae509d4be2127c8e441e91f52e`.
+
+## Disable completed-stage test traces, retain pipeline statistics
+
+Goal: stop printing temporary PTS, puller and SigServer playback traces while retaining `[PIPE-STATS]` for later queue/backpressure comparisons.
+
+Affected files: `ECloudAssistant/Codec/H264Encoder.cpp`, `ECloudAssistant/Codec/AVDEMuxer.cpp`, `ECloudAssistant/Codec/H264_Decoder.cpp`, `ECloudAssistant/Puller/UI/AVPlayer.cpp`, and `ENET/SigServer/SigConnection.cpp`.
+
+Behavior: the temporary `[PTS-CHECK]`, `[TRACE-PULL-20260814]` informational output and `[TRACE-PLAY-20260814]` server output are commented out. Puller failure warnings remain active without the dated trace prefix. `AVPlayer` retains a silent `SetStreamCallBack([](bool){})`, because the current `AVDEMuxer::FetchStream()` calls `FetchStreamInfo()` only when a callback exists; removing the callback together with its log would silently prevent demux initialization. `[PIPE-STATS]`, RTMP publish status and media/protocol behavior are unchanged. The PTS check can be re-enabled for future restart/drop-frame tests.
+
+Verification: forced recompilation of the four affected client translation units and a client Debug link succeeded; only existing unused-parameter and signedness warnings appeared. `git diff --check` passed. The Linux SigServer change has not been rebuilt or run in VMware; client push/pull runtime was not rerun for this log-only change.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitation: the historical phase-3 worklog still lists post-PTS latency, restart and skipped-frame verification as outstanding; disabling the temporary log is not evidence that those checks passed. Rollback point: uncomment the marked temporary output and restore the dated puller warning labels if needed.
+
+## Audio capture safety and lifecycle (问题优化二 phase 1)
+
+Goal: remove the crash, undefined-data and stale-residual risks in the WASAPI audio capture path before touching anything else. No change to encode settings, RTMP, capture geometry, framerate or PTS.
+
+Affected files: `ECloudAssistant/Pusher/capture/WASAPICapture.h`, `ECloudAssistant/Pusher/capture/WASAPICapture.cpp`, `ECloudAssistant/Pusher/capture/AudioCapture.cpp`.
+
+### Silent-packet data path
+
+`capture()` zeroed `m_pcmBuf` when `AUDCLNT_BUFFERFLAGS_SILENT` was set but still handed `pData` to the callback, and the memset covered the whole 4096-byte allocation rather than the packet's byte count. `pData` has no defined contents under the silent flag, so the callback was reading undefined memory while the buffer that had just been zeroed was never used. Both branches now hand the callback `m_pcmBuf` with `packetBytes = numFramesAvailable * nBlockAlign`; `ReleaseBuffer` is paired on every branch including the new error branch that rejects a null `pData` without the silent flag; `m_pcmBufSize` moved from `uint32_t` to `size_t` so the capacity comparison cannot overflow.
+
+### init/exit rollback
+
+`GetAddressOf()` does not release an existing pointer, so a second `init()` after a partial failure overwrote and leaked whatever had already been acquired, and every failure return left the client half-initialized. `exit()` called `CoUninitialize()` unconditionally and never released the interfaces or the `CoTaskMemAlloc`-allocated `m_mixFormat`. `init()` now calls a new `releaseResources()` before starting and on every failure return, uses `ReleaseAndGetAddressOf()`, and tracks `CoInitialize` in `m_comInitialized` so `CoUninitialize` is paired exactly once (`S_OK` and `S_FALSE` both require a pairing call). `exit()` is idempotent and now stops the thread first, then releases everything, so a later `init()` restarts from a clean state.
+
+### start/stop lifecycle
+
+`m_isEnabeld` is now `std::atomic<bool>` because the capture thread both reads it and writes it on self-exit. `stop()` is idempotent, joins only joinable threads, and no longer dereferences a null `m_threadPtr`. `start()` joins a thread that already exited before creating a new one, catches thread-creation failure and rolls back `Start()`. The defect this closes: when `capture()` returned -1 the thread broke out of its loop but left the flag set, so a later `start()` returned success without ever starting a thread, and audio stayed silently dead for the rest of the process.
+
+### Stale audio across restart
+
+`stopInternal()` now calls `IAudioClient::Reset()` after `Stop()` (guarded by a new `m_started` flag) to flush the capture buffer. `Reset()` is documented to flush pending data and to require a stopped stream; the thread is already joined at that point, so the call is legal. Measured before the fix: restarting the same client re-delivered exactly 2 packets (about 20 ms) of pre-stop audio at the head of the new window, deterministically in 5 of 5 runs, even after 1.5 s of guaranteed silence from the source.
+
+### AudioCapture lifecycle
+
+`Close()` is idempotent and now always calls `capture_->exit()`; the original never did, so `CoUninitialize` was never reached and each stream leaked a COM apartment reference on the signaling scheduler thread. `~AudioCapture()` calls `Close()`, `Init()` rolls back with `capture_->exit()` when `StartCapture()` fails, `GetSamples()` is null-safe, and the capture callback drops zero-length writes and checks `audio_buffer_`.
+
+### Verification
+
+Build: Qt MinGW 13.1.0 Debug recompiled `WASAPICapture.o` and `AudioCapture.o` and relinked `debug/ECloudAssistant.exe`; `mingw32-make -f Makefile.Debug -q` returns 0. The only new-compile warning is the pre-existing sign-compare in `AudioCapture::Read`.
+
+Real-device probe: a temporary console probe that links `WASAPICapture.cpp` directly and drives this machine's default render endpoint was kept at `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/probe/wasapi_probe.cpp` (gitignored, disposable). Compile command:
+
+```bash
+g++ -std=gnu++17 -Wall -Wextra -o wasapi_probe.exe wasapi_probe.cpp \
+  ../../../Pusher/capture/WASAPICapture.cpp -I../../../Pusher/capture \
+  -ID:/Qt/6.10.1/mingw_64/include -ID:/Qt/6.10.1/mingw_64/include/QtCore \
+  -ID:/Qt/6.10.1/mingw_64/mkspecs/win32-g++ -LD:/Qt/6.10.1/mingw_64/lib \
+  -lQt6Core -lole32 -lksuser -lwinmm -lmingw32 -mthreads
+```
+
+Probe design note: loopback capture delivers no packets at all while no render stream is active, so the first probe version reported 0 packets for every restart and looked like a restart bug. Every capture window now holds a render stream open with a looped in-memory WAV (a -66 dBFS tone, or pure silence), which makes silent and non-silent windows deterministic and audible-free. Device format observed: `tag=65534` (EXTENSIBLE), 2 channels, 48000 Hz, 16-bit, blockAlign 4, so `adjustFormatTo16Bits` took the EXTENSIBLE branch and shared-mode `Initialize` accepted the rewritten format.
+
+Results on the final code: non-silent window 196-198 packets, all of them non-zero, `null=0`, `badBytes=0`, `maxFrames=480` (480 frames x 4 bytes = 1920 bytes per packet, and 198 x 1920 = 380160 bytes, matching the byte total); silent window after a restart 200-201 packets, every one of them all-zero, zero non-zero packets in 5 of 5 runs; the same window before the `Reset()` flush contained exactly 2 non-zero packets at the very start in 5 of 5 runs; re-init after `exit()` twice plus `stop()` after `exit()` still captured real audio; 30 consecutive init/start/stop/exit cycles all succeeded.
+
+Comparison against the pre-change code: the probe built against `git show HEAD:...WASAPICapture.{h,cpp}` segfaulted (exit code 139) on the destructor path where a capturing object is destroyed without `stop()`/`exit()`, because the shared_ptr destroyed a joinable thread. The fixed version completes that step and the 30 cycles. The silent-branch defect did not reproduce as wrong output in this environment: the driver happened to return zero-filled `pData` for silent packets, so the fix removes reliance on undocumented data rather than changing observed audio, and the `[run2]` zero-packet counts are the same in both versions.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). The unrelated pre-existing working-tree modification in `ENET/RtmpServer/RtmpConnection.cpp` was not touched.
+
+Remaining limitations: no end-to-end push/pull or listening verification was performed. Driving one needs the GUI login against `192.168.3.130:8523` and a controller client to send CREATESTREAM, and publishing a test stream to the shared server at `192.168.3.130:1935` was deliberately skipped, so the user will run the real push/pull check. The recovery path for `start()` after the capture thread self-exited is reasoned from the code, not reproduced: forcing `capture()` to fail needs a real endpoint change such as unplugging or disabling the device. COM apartments were left as they are: `init()` runs on a signaling scheduler thread and the capture thread calls the WASAPI interfaces without its own `CoInitializeEx`, so the STA-created interfaces are used unmarshaled. Start and stop both execute on that same scheduler thread, which is why the `CoInitialize`/`CoUninitialize` pairing is sound, and switching the capture thread to the MTA would mean moving device ownership onto that thread, which is a separate change. `adjustFormatTo16Bits` still has its -1 return ignored and is unchanged. `Reset()` discards up to one period (10 ms) of audio captured before `Stop()`, which is intended on the stop/close paths where the encoder thread has already been joined.
+
+Rollback point: revert the three files under `ECloudAssistant/Pusher/capture/` to the state at `d238b8d`.
+
+## H.264 multi-NAL FLV packaging (问题优化二 phase 2)
+
+Date: 2026-09-26. Goal: replace the fixed-four-byte removal and single whole-frame NAL length with per-NAL AVCC framing, without changing capture, encoder settings, audio, PTS or queue policy.
+
+Affected files: `ECloudAssistant/Pusher/RtmpPushManager.cpp`, `ECloudAssistant/Pusher/rtmp/RtmpPublisher.{h,cpp}`, new `ECloudAssistant/Pusher/rtmp/FlvAvcPacket.{h,cpp}`, `ECloudAssistant/Pusher/Pusher.pri`, new `ECloudAssistant/tests/FlvAvcPacketTest.cpp`, and `context/问题优化二.md`.
+
+Behavior: `PushVideo()` passes the complete Annex-B access unit synchronously, removing the old temporary copy and fixed 4-byte skip. `PushVideoFrame()` accepts `const uint8_t*` (read-only input; its only project caller is updated), converts the entire input before any send/state mutation, then copies the final FLV payload into shared owned storage for asynchronous RTMP sending. The converter accepts mixed 3/4-byte start codes, strips Annex-B leading/trailing zero bytes, preserves emulation-prevention bytes, and writes a separate 4-byte big-endian size for every non-empty NAL. A type-5 IDR anywhere in the access unit determines the `0x17/0x27` frame tag and initial keyframe gate; SPS alone is no longer a keyframe. AVC/AAC sequence headers still precede the first IDR, and `lengthSizeMinusOne` stays 3 (four-byte lengths). Null/empty input, missing start codes, empty NALs, or uint32 payload-size overflow return -1 without emitting partial output or changing the first-keyframe state. Encoder output/extradata and existing SPS/PPS extraction are unchanged.
+
+Verification: the deterministic test's `--legacy` path reproduces the old packaging algorithm and exits 1 with `FAIL: legacy multi-NAL conversion`; the fixed path exits 0. Golden byte comparisons and independent length walking cover single 3/4-byte-start-code NALs, mixed SPS/PPS/SEI/IDR, SEI before IDR, multiple IDR slices, P frames, SPS without IDR, escaped `00 00 03 01`, leading/trailing Annex-B zeros, a 65537-byte NAL, and null/missing/empty/truncated delimiter inputs. Test compilation with `-Wall -Wextra` has no warnings. Reproduction from repository root:
+
+```powershell
+& 'D:/Qt/Tools/mingw1310_64/bin/g++.exe' -std=c++17 -Wall -Wextra -I ECloudAssistant/Pusher/rtmp ECloudAssistant/tests/FlvAvcPacketTest.cpp ECloudAssistant/Pusher/rtmp/FlvAvcPacket.cpp -o ECloudAssistant/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/probe/flv_avc_test.exe
+& 'ECloudAssistant/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/probe/flv_avc_test.exe' --legacy # expected exit 1
+& 'ECloudAssistant/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/probe/flv_avc_test.exe' # expected exit 0
+```
+
+Build: regenerated Makefiles with Qt 6.10.1 qmake (`../../ECloudAssistant.pro -spec win32-g++ CONFIG+=debug`) in the existing Debug build directory; MinGW 13.1.0 `mingw32-make -f Makefile.Debug -j4` compiled the new converter and changed/dependent sources and linked `debug/ECloudAssistant.exe`, exit 0. Existing RTMP constructor-order/unused-parameter and manager signedness warnings remain. `git diff --check` passed.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`); all unrelated pre-existing working-tree changes were preserved. Rollback point: revert only this phase's manager/publisher/build-list hunks, remove the three new converter/test files, and restore the phase status; do not revert the audio or trace work recorded above.
+
+Remaining limitations at implementation time: no actual RTMP push/pull, listening, reconnection, repaired-wire capture or target hardware decode was performed by the agent. Local byte correctness and a successful link are not evidence of those runtime results. A subsequently supplied user screenshot is recorded below. Complete `17 01`/`27 01` message length walking, initial playback/reconnect and target decode remain outstanding before phase 3. No post-fix latency measurement is available. Overflow is guarded by code but not tested with multi-gigabyte allocations. Existing SPS/PPS extraction through `H264Paraser::findNal()` was not changed or independently runtime-validated.
+
+### Phase 2 acceptance evidence update (2026-09-26)
+
+Goal: record the user's post-change packet-byte screenshot and summarize phase 2 acceptance without treating partial packet evidence as a complete runtime test. Affected files: `context/问题优化二.md`, `context/WORKLOG.md`, and the unchanged screenshot copied to `context/evidence/phase2-rtmp-20260926-221835.png`. No media or protocol code changed in this update.
+
+Evidence: user supplied `C:/Users/95892/Pictures/Screenshots/屏幕截图 2026-09-26 221835.png`. After the visible five-byte `17 01 00 00 00` FLV AVC header, the screenshot shows SPS length `00 00 00 18` (24), SPS bytes `67 42 c0 28 da 01 e0 08 9f 96 10 00 00 03 00 10 00 00 03 03 c8 f1 83 2a`, PPS length `00 00 00 04` (4), PPS bytes `68 ce 3c 80`, and SEI length `00 00 02 b8` (696) followed by NAL header `06`. The complete visible SPS and PPS terminate exactly at the following length prefixes. Emulation-prevention `00 00 03` sequences inside SPS are retained. This confirms separate NAL lengths in the visible packet portion; SEI's declared length is visible but its entire content/end, following IDR and packet end are outside the screenshot.
+
+Acceptance summary: code modification complete; deterministic byte tests, Debug build/link and the user's screenshot partial-boundary check passed. No raw capture or complete reassembled message was analyzed in this update. Full IDR/P-frame length walking, sequence-header verification, actual playback/reconnection, and hardware-decoder compatibility remain unverified. The `0x17` tag alone is not proof of the unseen IDR. See the phase-2 acceptance table in `context/问题优化二.md`.
+
+Verification for this documentation update: checked the copied evidence file exists, cross-checked the recorded SPS byte count and PPS/SEI boundaries, and ran `git diff --check`. No rebuild was needed for documentation-only changes. Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback: remove this evidence-update subsection, the corresponding phase-2 summary/status edits, and the copied screenshot; retain the implemented phase-2 code and earlier worklog entries.

@@ -47,15 +47,14 @@ qint32 H264Encoder::Encode(const quint8 *rgba_buffer, quint32 width, quint32 hei
         //编码失败
         return -1;
     }
-    //[临时] 阶段三 PTS 核对：正常运行时输入帧与输出包的 pts/dts 应逐帧 +1，
-    //因此只在首帧、跳帧和重启对齐时打印。一直无输出即表示 PTS 单调且已透传；验收后删除。
-    static qint64 lastPts = -1;
-    if(pts != lastPts + 1 || pkt->pts != pts || pkt->dts != pts)
-    {
-        qInfo() << "[PTS-CHECK] in =" << pts << "pkt.pts =" << (qlonglong)pkt->pts
-                << "pkt.dts =" << (qlonglong)pkt->dts << "pkt.duration =" << (qlonglong)pkt->duration;
-    }
-    lastPts = pts;
+    // 阶段三 PTS 核对日志暂时关闭，需要复测时再启用。
+    // static qint64 lastPts = -1;
+    // if(pts != lastPts + 1 || pkt->pts != pts || pkt->dts != pts)
+    // {
+    //     qInfo() << "[PTS-CHECK] in =" << pts << "pkt.pts =" << (qlonglong)pkt->pts
+    //             << "pkt.dts =" << (qlonglong)pkt->dts << "pkt.duration =" << (qlonglong)pkt->duration;
+    // }
+    // lastPts = pts;
     quint32 extra_size = 0;
     quint8* extra_data = nullptr;
     //判断是否是关键帧 如果是关键帧需要在264前面添加编码信息

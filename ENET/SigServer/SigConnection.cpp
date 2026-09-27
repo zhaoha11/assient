@@ -271,7 +271,7 @@ void SigConnection::DoCreateStream(const packet_head *data)
 {
     PlayStream_body body;
     CreateStreamReply_body* reply = (CreateStreamReply_body*)data;
-    printf("[TRACE-PLAY-20260814] CREATESTREAM reply: result=%d len=%d address=%s\n", reply->result, reply->len, reply->GetstreamAddres().c_str());
+    // printf("[TRACE-PLAY-20260814] CREATESTREAM reply: result=%d len=%d address=%s\n", reply->result, reply->len, reply->GetstreamAddres().c_str());
     streamAddres_ = reply->GetstreamAddres();
     //判断所有连接的状态 ,如果连接器状态十空闲，我们就去回应
     for(auto idefy : objectes_)

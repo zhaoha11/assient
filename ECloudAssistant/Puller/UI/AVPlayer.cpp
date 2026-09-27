@@ -36,9 +36,7 @@ void AVPlayer::Init()
     avContext_ = new AVContext();
     //创建这个解封装器
     avDEMuxer_.reset(new AVDEMuxer(avContext_));
-    avDEMuxer_->SetStreamCallBack([](bool opened){
-        qInfo() << "[TRACE-PULL-20260814] demux stream setup" << (opened ? "succeeded" : "failed");
-    });
+    avDEMuxer_->SetStreamCallBack([](bool){});
     //初始化这个音频播放器
     this->InitAudio(2,44100,16);
     //绑定信号与槽 去播放视频
@@ -234,10 +232,10 @@ void AVPlayer::HandleStopStream()
 bool AVPlayer::HandleStartStream(const QString &streamAddr)
 {
     //开始拉流
-    qInfo() << "[TRACE-PULL-20260814] start pull" << streamAddr;
+    // qInfo() << "[TRACE-PULL-20260814] start pull" << streamAddr;
     if(!avDEMuxer_->Open(streamAddr.toStdString()))
     {
-        qWarning() << "[TRACE-PULL-20260814] failed to start demux thread";
+        qWarning() << "failed to start demux thread";
         return false;
     }
 

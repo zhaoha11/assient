@@ -12,14 +12,14 @@ public:
     ~RtmpPublisher();
     int  SetMediaInfo(MediaInfo media_info);
     int  OpenUrl(std::string url, int msec);
-    int  PushVideoFrame(uint8_t *data, uint32_t size);
+    // data contains a complete Annex-B access unit, including start codes.
+    int  PushVideoFrame(const uint8_t *data, uint32_t size);
     int  PushAudioFrame(uint8_t *data, uint32_t size);
     void Close();
     bool IsConnected();
     bool IsPublishing();
 private:
     RtmpPublisher(EventLoop *event_loop);
-    bool IsKeyFrame(uint8_t* data, uint32_t size);
     EventLoop *event_loop_ = nullptr;
     TaskScheduler  *task_scheduler_ = nullptr;
     std::shared_ptr<RtmpConnection> rtmp_conn_;

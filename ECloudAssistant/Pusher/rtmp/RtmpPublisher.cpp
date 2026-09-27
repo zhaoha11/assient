@@ -1,4 +1,5 @@
 #include "RtmpPublisher.h"
+#include "FlvAvcPacket.h"
 
 std::shared_ptr<RtmpPublisher> RtmpPublisher::Create(EventLoop *loop)
 {
@@ -128,9 +129,16 @@ int RtmpPublisher::OpenUrl(std::string url, int msec)
     return 0;
 }
 
-int RtmpPublisher::PushVideoFrame(uint8_t *data, uint32_t size)
+int RtmpPublisher::PushVideoFrame(const uint8_t *data, uint32_t size)
 {
-    if(rtmp_conn_ == nullptr || rtmp_conn_->IsClosed() || size <= 5)
+    if(rtmp_conn_ == nullptr || rtmp_conn_->IsClosed())
+    {
+        return -1;
+    }
+
+    std::vector<uint8_t> packet;
+    bool keyFrame = false;
+    if(!BuildFlvAvcPacket(data,size,packet,keyFrame))
     {
         return -1;
     }
@@ -140,7 +148,7 @@ int RtmpPublisher::PushVideoFrame(uint8_t *data, uint32_t size)
         //是否已经发送第一个包
         if(!has_key_frame_)
             {
-            if(this->IsKeyFrame(data,size))
+            if(keyFrame)
             {
                 has_key_frame_ = true;
                 rtmp_conn_->SendVideoData(0,avc_sequence_header_,avc_sequence_header_size_);
@@ -155,28 +163,9 @@ int RtmpPublisher::PushVideoFrame(uint8_t *data, uint32_t size)
     uint64_t timestamp = timestamp_.Elapsed();
     //如果已经发送第一个包
     //发送视频 tag + 264数据
-    std::shared_ptr<char> playload(new char[size + 4096],std::default_delete<char[]>());
-    uint32_t playload_size = 0;
-
-    //填充这个tag
-    uint8_t* body = (uint8_t*)playload.get();
-    uint32_t index = 0;
-    body[index++] = this->IsKeyFrame(data,size) ? 0x17 : 0x27;
-    body[index++] = 1;
-
-    body[index++] = 0;
-    body[index++] = 0;
-    body[index++] = 0;
-
-    body[index++] = (size >> 24) & 0xff;
-    body[index++] = (size >> 16) & 0xff;
-    body[index++] = (size >> 8) & 0xff;
-    body[index++] = (size) & 0xff;
-
-    //拷贝
-    memcpy(body + index ,data,size);
-    index += size;
-    playload_size = index;
+    uint32_t playload_size = static_cast<uint32_t>(packet.size());
+    std::shared_ptr<char> playload(new char[playload_size],std::default_delete<char[]>());
+    memcpy(playload.get(),packet.data(),playload_size);
     rtmp_conn_->SendVideoData(timestamp,playload,playload_size);
     return 0;
 
@@ -228,28 +217,6 @@ bool RtmpPublisher::IsPublishing()
     if(rtmp_conn_)
     {
         return rtmp_conn_->IsPublishing();
-    }
-    return false;
-}
-
-bool RtmpPublisher::IsKeyFrame(uint8_t *data, uint32_t size)
-{
-    //判断关键帧 startcode 3 4
-    int startcode = 0;
-    if(data[0] == 0 && data[1] == 0 && data[2] == 0)
-    {
-        startcode = 3;
-    }
-    else if(data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0)
-    {
-        startcode = 4;
-    }
-
-    //再去获取类型
-    int type = data[startcode] & 0x1f;
-    if(type == 5 || type == 7)//关键帧
-    {
-        return true;
     }
     return false;
 }

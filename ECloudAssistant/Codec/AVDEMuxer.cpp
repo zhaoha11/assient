@@ -128,18 +128,18 @@ void AVDEMuxer::FetchStream(const std::string &path)
 
 bool AVDEMuxer::FetchStreamInfo(const std::string &path)
 {
-    qInfo() << "[TRACE-PULL-20260814] avformat_open_input" << path.c_str();
+    // qInfo() << "[TRACE-PULL-20260814] avformat_open_input" << path.c_str();
     const int openResult = avformat_open_input(&pFormateCtx_,path.c_str(),nullptr,&avDict_);
     if(openResult != 0)
     {
-        qWarning() << "[TRACE-PULL-20260814] avformat_open_input failed" << openResult;
+        qWarning() << "avformat_open_input failed" << openResult;
         return false;
     }
 
     const int streamInfoResult = avformat_find_stream_info(pFormateCtx_,nullptr);
     if(streamInfoResult < 0)
     {
-        qWarning() << "[TRACE-PULL-20260814] avformat_find_stream_info failed" << streamInfoResult;
+        qWarning() << "avformat_find_stream_info failed" << streamInfoResult;
         return false;
     }
 
@@ -161,7 +161,7 @@ bool AVDEMuxer::FetchStreamInfo(const std::string &path)
     {
         if(h264Decoder_->Open(pFormateCtx_->streams[videoIndex]->codecpar) != 0)
         {
-            qWarning() << "[TRACE-PULL-20260814] h264 decoder open failed";
+            qWarning() << "h264 decoder open failed";
             h264Decoder_.reset();
             return false;
         }
@@ -170,13 +170,13 @@ bool AVDEMuxer::FetchStreamInfo(const std::string &path)
     {
         if(aacDecoder_->Open(pFormateCtx_->streams[audioIndex]->codecpar) != 0)
         {
-            qWarning() << "[TRACE-PULL-20260814] aac decoder open failed";
+            qWarning() << "aac decoder open failed";
             aacDecoder_.reset();
             return false;
         }
     }
 
-    qInfo() << "[TRACE-PULL-20260814] demux streams" << "video=" << videoIndex << "audio=" << audioIndex;
+    // qInfo() << "[TRACE-PULL-20260814] demux streams" << "video=" << videoIndex << "audio=" << audioIndex;
     return videoIndex != -1;
 }
 

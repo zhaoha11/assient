@@ -3,6 +3,7 @@ INCLUDEPATH += $$PWD \
                $$PWD/rtmp
 
 HEADERS += \
+    $$PWD/rtmp/FlvAvcPacket.h \
     $$PWD/RtmpPushManager.h \
     $$PWD/VideoPipelineStats.h \
     $$PWD/capture/AudioBuffer.h \
@@ -18,6 +19,7 @@ HEADERS += \
     $$PWD/rtmp/rtmp.h
 
 SOURCES += \
+    $$PWD/rtmp/FlvAvcPacket.cpp \
     $$PWD/RtmpPushManager.cpp \
     $$PWD/VideoPipelineStats.cpp \
     $$PWD/capture/AudioCapture.cpp \

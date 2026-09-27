@@ -5,9 +5,11 @@
 #include <wrl.h>
 #include <cstdio>
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <mutex>
 #include <memory>
+#include <atomic>
 #include <thread>
 
 class WASAPICapture
@@ -29,9 +31,17 @@ public:
     }
 private:
     bool m_initialized = false;
-    bool m_isEnabeld = false;
+    //CoInitialize 返回 S_OK 或 S_FALSE 都要求配对 CoUninitialize，用独立标志跟踪是否欠一次配对
+    bool m_comInitialized = false;
+    //记录流是否真的 Start 过，Reset 只对已停流的客户端有意义
+    bool m_started = false;
+    //采集线程自己也会读写，stop/start 可能与线程退出同时发生，必须原子访问
+    std::atomic<bool> m_isEnabeld{false};
     int adjustFormatTo16Bits(WAVEFORMATEX *pwfx);
     int capture();
+    int startInternal();
+    int stopInternal();
+    void releaseResources();
     const int REFTIMES_PER_SEC = 10000000;
     const int REFTIMES_PER_MILLISEC = 10000;
     const IID IID_IAudioClient = __uuidof(IAudioClient);
@@ -40,12 +50,12 @@ private:
     const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
 
     std::mutex m_mutex;
-    uint32_t m_pcmBufSize;
-    uint32_t m_bufferFrameCount;
+    size_t m_pcmBufSize;
+    uint32_t m_bufferFrameCount = 0;
     PacketCallback m_callback;
     WAVEFORMATEX *m_mixFormat = NULL;
     std::shared_ptr<uint8_t> m_pcmBuf; //捕获之后pcm缓存的这个pcmBuf中
-    REFERENCE_TIME m_hnsActualDuration;
+    REFERENCE_TIME m_hnsActualDuration = 0;
     std::shared_ptr<std::thread> m_threadPtr;
     Microsoft::WRL::ComPtr<IMMDevice> m_device;
     Microsoft::WRL::ComPtr<IAudioClient> m_audioClient;
