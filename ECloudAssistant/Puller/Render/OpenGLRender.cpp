@@ -201,7 +201,13 @@ void OpenGLRender::paintGL()
     glClear(GL_COLOR_BUFFER_BIT);
 
     //更新视图
-    glViewport(m_pos.x(),m_pos.y(),m_zoomSize.width(),m_zoomSize.height());
+    //glViewport 以设备像素为单位，而 m_pos / m_zoomSize 由 resizeGL() 按 Qt 逻辑像素计算，
+    //窗口位于缩放比例不同的显示器时需按当前所在屏幕的 DPR 换算，否则画面会缩小并偏移
+    const qreal dpr = devicePixelRatioF();
+    glViewport(qRound(m_pos.x() * dpr),
+               qRound(m_pos.y() * dpr),
+               qRound(m_zoomSize.width() * dpr),
+               qRound(m_zoomSize.height() * dpr));
     //绑定着色器，开始渲染
     program_->bind();
 

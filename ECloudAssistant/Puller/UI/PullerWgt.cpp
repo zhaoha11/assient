@@ -1,6 +1,5 @@
 #include "PullerWgt.h"
 #include <QCloseEvent>
-#include <QResizeEvent>
 #include <QVBoxLayout>
 
 PullerWgt::PullerWgt(EventLoop* loop,QWidget *parent)
@@ -37,11 +36,4 @@ void PullerWgt::closeEvent(QCloseEvent *event)
         player_->StopRemote();
     }
     QMainWindow::closeEvent(event);
-}
-
-void PullerWgt::resizeEvent(QResizeEvent *event)
-{
-    //后面处理
-    player_->resize(event->size());
-    QMainWindow::resizeEvent(event);
 }
