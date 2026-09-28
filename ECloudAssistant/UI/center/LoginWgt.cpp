@@ -15,7 +15,7 @@ LoginWgt::LoginWgt(QWidget *parent)
 {
     setWindowFlag(Qt::FramelessWindowHint);
     setAttribute(Qt::WA_StyledBackground);
-    setFixedSize(600, 510);
+    setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
 
     acountEdit_ = new QLineEdit(this);
     passwordEdit_ = new QLineEdit(this);

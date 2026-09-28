@@ -9,7 +9,8 @@ ListInfoWgt::ListInfoWgt(QWidget *parent)
 {
     setWindowFlag(Qt::FramelessWindowHint);
     setAttribute(Qt::WA_StyledBackground);
-    setFixedSize(200,540);
+    //宽度固定，高度随主窗口变化
+    setFixedWidth(200);
 
     userBtn_ = new QPushButton(this);
     listWgt_ = new ListWidget(this);
@@ -54,7 +55,8 @@ ListInfoWgt::ListInfoWgt(QWidget *parent)
 
 
     userBtn_->setFixedSize(100,100);
-    listWgt_->setFixedSize(200,340);
+    //导航列表宽度固定，高度经布局伸展因子随窗口变化
+    listWgt_->setFixedWidth(200);
 
     //布局
     QVBoxLayout* layout = new QVBoxLayout(this);

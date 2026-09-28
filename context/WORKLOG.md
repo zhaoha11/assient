@@ -957,3 +957,61 @@ Verification: qmake re-run (`qmake ..\..\ECloudAssistant.pro -spec win32-g++ "CO
 Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitation: the page is a visual placeholder only; phase 2 must add file selection and the actual media pipeline. The two generated icons are drawn programmatically and can be replaced by designed assets without code changes.
 
 Rollback point: remove the `LocalPlayerWgt` entry from `UI.pri`, the `stackWgt_->addWidget(localPlayerWgt_)` call and member in `MainWgt`, the fourth `CustomWgt` in `ListInfoWgt.cpp`, the `LocalPlayerWgt` blocks in `main.css`, the two `local*.png` entries in `res.qrc`, and delete `UI/center/LocalPlayerWgt.{h,cpp}` and the two icons; no remote control, device list, settings, signaling, RTMP or server behavior is touched.
+
+## Local playback initial player UI (本地播放 phase 2.1)
+
+Date: 2026-09-28. Goal: replace the phase-1 placeholder with the initial local-player surface while keeping `LocalPlayerWgt` independent from the remote-monitor window and all media behavior.
+
+Affected files: `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`, `ECloudAssistant/UI/brown/main.css`, and `context/本地播放.md`.
+
+Behavior: `LocalPlayerWgt` now uses one clear hierarchy: title and short description, a large dark video surface with an unopened-file empty state, and one compact bottom control bar. The control bar contains open-file, play/pause, stop, progress, current/total time, volume and speed controls. In the initial empty state, open-file remains visually available while playback-dependent controls are disabled. Buttons, sliders and the speed selector have dark-theme focus/disabled styling. No file dialog, signal connection, demuxing, decoding, OpenGL rendering, audio output or playback-state handling was added. `PullerWgt`, `AVPlayer` and all remote-control paths are unchanged.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` recompiled `LocalPlayerWgt.o`, regenerated the stylesheet resource and linked `debug/ECloudAssistant.exe`, exit 0. A disposable Qt preview program rendered `LocalPlayerWgt` at its 600x510 logical size; the title, video surface, empty state and complete control bar fit without clipping or overlap. `git diff --check` passed. Manual verification inside the full client, including keyboard focus appearance at runtime, is still pending.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitations: all controls are UI-only; the open button intentionally has no file-dialog behavior, and the disabled controls do not affect media state. Recent items, playlists and detailed file metadata are outside phase 2.1. The local media pipeline and the exact reuse boundary for `AVDEMuxer`, decoders, `OpenGLRender` and `AudioRender` remain future work.
+
+Rollback point: restore the former placeholder-only `LocalPlayerWgt.{h,cpp}` and its two original `main.css` selectors, then remove this phase-2.1 document/worklog update. No remote monitoring, signaling, RTMP or media implementation needs to be reverted.
+
+## Full-size player layout (本地播放 phase 2.2)
+
+Date: 2026-09-28. Goal: turn `LocalPlayerWgt` from an intro-style feature page into a full-size player surface per `context/本地播放.md` phase 2.2: remove the page title/description, let the video area start at the page top and fill all space above the progress row, hug the control bar to the page bottom, and drop residual page margins. Layout-only change; no media or file-selection logic.
+
+Affected files: `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`, `ECloudAssistant/UI/brown/main.css`.
+
+Behavior: the title and description labels are deleted together with their layout items, and their now-orphaned QSS rules (`localPageTitle`, `localPageDescription`) are removed from `main.css`. `LocalPlayerWgt` no longer calls `setFixedSize(600,510)`; it uses an Expanding/Expanding size policy so the fixed 600x510 `QStackedWidget` in `MainWgt` decides the page size. The root `QVBoxLayout` uses zero margins and zero spacing with `videoSurface` at stretch factor 1, so the video area occupies everything above the control bar and the bar (progress row + action row, still one unified bar per the user's decision) hugs the page bottom. Per the user's decision the full-bleed flat style replaces the card look: `localVideoSurface` and `localControlBar` keep their dark backgrounds but lose their 1px borders and 12px corner radii. Control bar internal padding, empty state, object names, disabled and focus styles from phase 2.1 are unchanged.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; rebuilt `LocalPlayerWgt.o`, `moc_LocalPlayerWgt.o`, regenerated `qrc_res.cpp` (embedded css changed) and relinked `debug/ECloudAssistant.exe` (32,128,364 bytes, 2026-09-28 17:49 local time as reported by Explorer). No new warnings. Manual checks still pending in the running client: video area starts at page top and resizes with the window, no title/description remains, control bar hugs the bottom, phase 2.1 controls and empty state intact, other pages unaffected.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitation: static layout only — no media pipeline; the two layout decisions (progress row inside the unified bar, flat full-bleed styling) were confirmed with the user.
+
+Rollback point: restore the title/description widgets and `setFixedSize(600,510)` with the 28/24/28/22 root margins and 12px spacing in `LocalPlayerWgt.cpp`, and restore the card-style `localVideoSurface`/`localControlBar` QSS rules plus the `localPageTitle`/`localPageDescription` rules in `main.css`; no other component is affected.
+
+## Frameless main-window resize (本地播放 phase 2.3)
+
+Date: 2026-09-28. Goal: per `context/本地播放.md` phase 2.3, keep `Qt::FramelessWindowHint` but make the fixed-size main window resizable from all four edges and corners with correct directional cursors, and let the right-side content (including the local player video area) fill the extra space. Layout/window-shell change only; no media, signaling or RTMP behavior.
+
+Affected files: `ECloudAssistant/ECloudAssistant.{h,cpp}`, `ECloudAssistant/UI/title/TitleWgt.cpp`, `ECloudAssistant/UI/list/ListInfoWgt.cpp`, `ECloudAssistant/UI/center/MainWgt.cpp`, `ECloudAssistant/UI/center/LoginWgt.cpp`, `ECloudAssistant/UI/center/RemoteWgt.cpp`, `ECloudAssistant/UI/center/DeviceListWgt.cpp`.
+
+Behavior: the top-level window replaces `setFixedSize(800,540)` with `resize(800,540)` plus `setMinimumSize(800,540)` (minimum equals the previous fixed size so no page layout collapses). Resize hit-testing lives in an application-level `eventFilter` in `ECloudAssistant`: mouse tracking is enabled recursively on the window subtree so edge hover produces `MouseMove` events; a 6-logical-px border band maps the cursor position to `Qt::Edges` (diagonal cursors on corners), and a left-button press inside the band calls `QWindow::startSystemResize()` for native smooth resizing, consuming the event so the existing title-drag handlers cannot also fire. Button widgets (minimize/close and others) keep priority — hits over `QPushButton` children skip resize logic; while maximized or full screen, hit-testing is disabled; `Leave` events reset the cursor. Existing drag/minimize/close behavior is otherwise untouched. On the layout side, `TitleWgt` becomes `setFixedHeight(30)`, `ListInfoWgt` and its nav list become `setFixedWidth(200)`, `MainWgt` gains a zero-margin `QVBoxLayout` around `stackWgt_` and drops both fixed sizes, `settingWgt_` drops its fixed size, and `LoginWgt`/`RemoteWgt`/`DeviceListWgt` replace `setFixedSize(600,510)` with `QSizePolicy::Expanding` (their internal `QVBoxLayout`s already use stretch factors). The local player page keeps its phase-2.2 expanding video area, so it absorbs new space while the control bar hugs the bottom.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; rebuilt `ECloudAssistant.o`, `moc_ECloudAssistant.o`, `TitleWgt.o`, `ListInfoWgt.o`, `MainWgt.o`, `LoginWgt.o`, `RemoteWgt.o`, `DeviceListWgt.o` and relinked `debug/ECloudAssistant.exe` (32,241,840 bytes, 2026-09-28 19:52:16). `git diff --check` exit 0 (CRLF conversion notices only). Only pre-existing warnings remain (deprecated `globalPos` in the untouched drag handlers, `ListInfoWgt` sign-compare). Manual verification pending in the running client: smooth resize from all edges/corners with correct cursors, minimum-size clamp at 800x540, nav width unchanged, pages filling in real time, title drag and page switching unaffected, remote-monitor window unaffected.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitation: pure Qt hit-testing (no native `WM_NCHITTEST`), so resize is Qt-driven; hit band is 6px and is skipped over buttons, so the exact corner pixels over the close button do not resize. Minimum size equals the old fixed size, so the window cannot shrink below 800x540.
+
+Rollback point: restore `setFixedSize(800,540)` and remove the event-filter/edge-hit helpers in `ECloudAssistant.{h,cpp}`; restore `setFixedSize` on `TitleWgt`, `ListInfoWgt`, `listWgt_`, `MainWgt`, `stackWgt_`, `settingWgt_`, `LoginWgt`, `RemoteWgt`, `DeviceListWgt`; no media or remote-monitor code is involved.
+
+## Empty-state title color tweak (本地播放 UI)
+
+Date: 2026-09-28. Goal: user request — the "尚未打开文件" empty-state title should be pure white instead of the near-white cool tint, and the `LocalPlayerWgt` page background should be white instead of the purple-teal gradient. Affected files: `ECloudAssistant/UI/brown/main.css` (`QLabel#localVideoEmptyTitle`, `QWidget#LocalPlayerWgt`). Behavior: empty-state title color `#f5f8f8` → `#ffffff`; page background gradient (`#3f2c49→#193f46`) → flat `#ffffff`. The dark video surface (`#101517`) and translucent control bar are unchanged, so the white background shows through the translucent bar only; all other local-player styles unchanged. Verification: `rcc` regenerated `qrc_res.cpp`, Debug build exit 0, exe relinked (2026-09-28 20:05 local). Rollback point: restore `#f5f8f8` on `localVideoEmptyTitle` and the original gradient on `LocalPlayerWgt`.
+
+## Local player background matches remote page
+
+Date: 2026-09-28. Goal: make the empty `LocalPlayerWgt` page use the same red-brown-to-teal background shown by `RemoteWgt` instead of the black video surface and gray control area.
+
+Affected file: `ECloudAssistant/UI/brown/main.css`.
+
+Behavior: `LocalPlayerWgt` now shares the exact qlineargradient selector used by `RemoteWgt`. The empty `localVideoSurface` and `localControlBar` backgrounds are transparent, allowing that one page gradient to remain continuous behind the empty-state text, progress row and controls. Control styling and all playback behavior are unchanged.
+
+Verification: regenerated the Qt resource object, rendered the page with the disposable preview program, and confirmed the gradient spans both the video and control regions. Qt 6.10.1 MinGW 13.1.0 Debug linked `debug/ECloudAssistant.exe` successfully, exit 0. Manual confirmation in the full client remains pending.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback point: remove `QWidget#LocalPlayerWgt` from the shared `Loginer`/`RemoteWgt` gradient selector, restore its former white rule, and restore the black `localVideoSurface` plus dark translucent `localControlBar` backgrounds.

@@ -8,7 +8,7 @@ RemoteWgt::RemoteWgt(QWidget *parent)
 {
     setWindowFlag(Qt::FramelessWindowHint);
     setAttribute(Qt::WA_StyledBackground);
-    setFixedSize(600,510);
+    setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
 
     selfCodeEdit_ = new QLineEdit(this);
     rmoteCodeEdit_ = new QLineEdit(this);

@@ -1,4 +1,4 @@
-﻿#include "TitleWgt.h"
+#include "TitleWgt.h"
 #include <QHBoxLayout>
 #include "StyleLoader.h"
 
@@ -7,7 +7,8 @@ TitleWgt::TitleWgt(QWidget *parent)
 {
     setWindowFlag(Qt::FramelessWindowHint);
     setAttribute(Qt::WA_StyledBackground);
-    setFixedSize(600,30);
+    //宽度随主窗口扩展，高度固定
+    setFixedHeight(30);
 
     minBtn_ = new QPushButton(this);
     closeBtn_ = new QPushButton(this);
