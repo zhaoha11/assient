@@ -1,4 +1,4 @@
-﻿#include "ListInfoWgt.h"
+#include "ListInfoWgt.h"
 #include <QVBoxLayout>
 #include "ListWidget.h"
 #include "CustomWgt.h"
@@ -32,20 +32,24 @@ ListInfoWgt::ListInfoWgt(QWidget *parent)
     //添加item
     CustomWgt* rmtWgt = new CustomWgt(this);
     CustomWgt* dvcWgt = new CustomWgt(this);
+    CustomWgt* localWgt = new CustomWgt(this);
     CustomWgt* setWgt = new CustomWgt(this);
 
     //更新他们的图片
     rmtWgt->setImageAndText("远程控制",":/UI/brown/list/remote.png",":/UI/brown/list/remote_press.png",true);
     dvcWgt->setImageAndText("设备列表",":/UI/brown/list/device.png",":/UI/brown/list/device_press.png");
+    localWgt->setImageAndText("本地播放",":/UI/brown/list/local.png",":/UI/brown/list/local_press.png");
     setWgt->setImageAndText("高级设置",":/UI/brown/list/setting.png",":/UI/brown/list/setting_press.png");
 
     //将这些customwgt存起来
     customWgts_.push_back(rmtWgt);
     customWgts_.push_back(dvcWgt);
+    customWgts_.push_back(localWgt);
     customWgts_.push_back(setWgt);
 
     listWgt_->AddWidget(rmtWgt);
     listWgt_->AddWidget(dvcWgt);
+    listWgt_->AddWidget(localWgt);
     listWgt_->AddWidget(setWgt);
 
 

@@ -105,3 +105,5 @@ QWidget#deviceEmptyState,QFrame#deviceSummary{background-color:rgba(255,255,255,
 QLabel#emptyTitle,QLabel#deviceSummaryTitle{font:700 14pt "Microsoft YaHei";color:#fff;} QLabel#emptyDescription,QLabel#deviceHint{font:10pt "Microsoft YaHei";color:#d8e2e5;}
 QLabel#deviceStatus{min-width:48px;padding:5px 9px;font:700 9pt "Microsoft YaHei";color:#e3fff7;border-radius:10px;} QLabel#deviceStatus[tone="pending"]{background-color:#60728a;} QLabel#deviceStatus[tone="ready"]{background-color:#218b7e;} QLabel#deviceStatus[tone="error"]{background-color:#a4525b;}
 QLabel#deviceFieldLabel{font:10pt "Microsoft YaHei";color:#b9cbd0;} QLabel#deviceFieldValue,QLabel#deviceCodeValue{font:700 11pt "Microsoft YaHei";color:#fff;} QLabel#deviceCodeValue{color:#7cf4e5;}
+QWidget#LocalPlayerWgt{background-color:qlineargradient(spread:pad,x1:0,y1:0,x2:1,y2:1,stop:0 #3f2c49,stop:1 #193f46);}
+QLabel#localPageTitle,QLabel#localPageDescription{background:transparent;border:none;} QLabel#localPageTitle{font:700 22pt "Microsoft YaHei";color:#fff;} QLabel#localPageDescription{font:10pt "Microsoft YaHei";color:#d8e2e5;}
