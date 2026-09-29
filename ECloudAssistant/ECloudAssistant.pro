@@ -1,4 +1,4 @@
-QT       += core gui network multimedia openglwidgets
+QT       += core gui network multimedia multimediawidgets openglwidgets
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 

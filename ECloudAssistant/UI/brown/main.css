@@ -107,6 +107,7 @@ QLabel#deviceStatus{min-width:48px;padding:5px 9px;font:700 9pt "Microsoft YaHei
 QLabel#deviceFieldLabel{font:10pt "Microsoft YaHei";color:#b9cbd0;} QLabel#deviceFieldValue,QLabel#deviceCodeValue{font:700 11pt "Microsoft YaHei";color:#fff;} QLabel#deviceCodeValue{color:#7cf4e5;}
 QLabel#localVideoEmptyTitle,QLabel#localVideoEmptyDescription,QLabel#localTimeLabel,QLabel#localVolumeLabel,QLabel#localSpeedLabel{background:transparent;border:none;}
 QFrame#localVideoSurface{background:transparent;}
+QStackedWidget#localVideoStack,QWidget#localVideoEmptyPage{background:transparent;}
 QLabel#localVideoEmptyTitle{font:700 14pt "Microsoft YaHei";color:#ffffff;}
 QLabel#localVideoEmptyDescription{font:9pt "Microsoft YaHei";color:#aebfc4;}
 QFrame#localControlBar{background:transparent;}

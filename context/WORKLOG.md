@@ -1029,3 +1029,166 @@ Verification: regenerated the qmake project so `Player.pri`, `LocalPlayer.cpp` a
 Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitations: `LocalPlayer` is currently a state-only controller. The open-file button, local source, `PlayerCore`, demuxing, decoding, OpenGL rendering, audio output, seeking, volume and speed behavior are not implemented. `Opening` and `Error` are reserved for future asynchronous backend results; starting a demux thread alone will not count as successful playback.
 
 Rollback point: remove the `Player` module include and files, remove the `LocalPlayer` member/connections from `LocalPlayerWgt`, and revert the phase-3.1 plan. `AVPlayer` needs no rollback because the final structure adds no local responsibility to it.
+
+## Local playback backend decision: Qt Multimedia
+
+Date: 2026-09-29. Goal: replace the planned local `PlayerCore + FFmpeg` playback implementation with a Qt Multimedia backend while preserving the completed `LocalPlayerWgt → LocalPlayer` boundary and the existing remote `AVPlayer` chain.
+
+Affected files: `context/本地播放.md` and `context/WORKLOG.md`. No source or build file changed in this decision update.
+
+Decision: local files will use `LocalPlayer → QMediaPlayer + QAudioOutput + QVideoWidget`. `LocalPlayer` remains the only business-facing wrapper for state, commands, progress and errors; `LocalPlayerWgt` must not scatter direct Qt Multimedia calls. The former plans for a shared `PlayerCore`, local `AVDEMuxer` adaptation, custom local decoders, A/V synchronization and playback clock are cancelled. Remote monitoring keeps its existing `AVPlayer`, signaling, RTMP, decoder and custom render/audio path unchanged.
+
+Roadmap: phase 3.3 adds Multimedia Widgets dependencies and establishes `LocalPlayer → QMediaPlayer`; phase 3.4 opens files and displays video; phase 3.5 implements play/pause/stop plus position/duration; phase 3.6 implements seek, volume, playback rate, errors and lifecycle acceptance.
+
+Verification: documentation was reviewed for the new architecture and `git diff --check` was run. No build was required because this update changes plans only. Commit ID: not created in this change.
+
+## Qt Multimedia backend bootstrap (本地播放 phase 3.3)
+
+Date: 2026-09-29. Goal: add the Qt Multimedia Widgets dependency and establish `LocalPlayer → QMediaPlayer + QAudioOutput` without opening files or changing the remote player.
+
+Affected files: `ECloudAssistant/ECloudAssistant.pro`, `ECloudAssistant/Player/LocalPlayer.{h,cpp}`, `context/本地播放.md`, and `context/WORKLOG.md`.
+
+Behavior: the qmake project now links `multimediawidgets`. `LocalPlayer` creates `QMediaPlayer` and `QAudioOutput` as QObject children and connects the audio output to the media player. `Play()`, `Pause()` and `Stop()` forward directly to Qt Multimedia. `QMediaPlayer::playbackStateChanged` maps real `PlayingState`, `PausedState` and non-idle `StoppedState` values back to the existing business state signal, replacing the former command-driven simulated transitions. No source, video output, progress, seek, volume, playback rate or error mapping is implemented in this phase. `AVPlayer`, RTMP, signaling and remote input code are untouched.
+
+Verification: reran qmake, rebuilt `LocalPlayer`, its moc object and dependent UI objects, and linked `debug/ECloudAssistant.exe` with Qt 6.10.1 MinGW 13.1.0, exit 0. A disposable offscreen probe successfully created `QMediaPlayer`, `QAudioOutput` and `QVideoWidget`, verified that the player's audio output points to the owned `QAudioOutput`, and verified the initial business state is `Idle`; exit 0. Final `make -q` and `git diff --check` are recorded after documentation edits.
+
+Commit ID: not created in this change. Remaining limitations: the local player has no media source and no `QVideoWidget` attachment yet, so it cannot open or play a file. Media status, duration, position and errors are intentionally deferred to phases 3.4～3.6.
+
+Rollback point: remove `multimediawidgets` from the qmake modules, remove the `QMediaPlayer`/`QAudioOutput` members and signal connection, and restore command-driven state transitions in `LocalPlayer`. No remote-player rollback is required.
+
+## Open file and video output (本地播放 phase 3.4)
+
+Date: 2026-09-29. Goal: connect `QFileDialog → LocalPlayer::Open(path) → QMediaPlayer::setSource()` and display real frames by placing `QVideoWidget` into the existing video area through `setVideoOutput()`, per `context/本地播放.md` phase 3.4.
+
+Affected files: `ECloudAssistant/Player/LocalPlayer.{h,cpp}` and `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`. No `.pro`/`.pri` change (`multimediawidgets` was already linked in 3.3); remote `AVPlayer`, RTMP, signaling and remote input untouched.
+
+Behavior: `LocalPlayer` now owns a `QVideoWidget`, wires it with `mediaPlayer_->setVideoOutput()`, and exposes it via `videoWidget()` so the UI can place it without touching `QMediaPlayer`. `Open(path)` validates the path first — a missing/non-file path enters `Error` and emits `sig_errorOccurred("文件不存在：…")`; otherwise it enters `Opening` and calls `setSource(QUrl::fromLocalFile(...))`. The state machine is now backend-driven: `mediaStatusChanged == LoadedMedia` promotes `Opening → Stopped`; `errorOccurred` moves to `Error` and maps `ResourceError/FormatError/NetworkError/AccessDeniedError` to Chinese messages via the new `sig_errorOccurred` signal. The `StoppedState` branch was narrowed to converge only from `Playing`/`Paused`, so a `StoppedState` callback can no longer clobber `Opening` or `Error`. On the UI side the video area is now a `QStackedWidget` with two pages: the empty-state page (default, also used to show the Chinese error text on failure) and the `QVideoWidget` page (shown once `Opening`/`Stopped`/`Playing`/`Paused`), toggled by `updateVideoArea()` from `applyLocalPlaybackState()`. The "打开文件" button is now a member connected to `openLocalFile()`, which runs `QFileDialog::getOpenFileName` with a common audio/video extension filter and returns early on cancel.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; rebuilt `LocalPlayer.o`, `LocalPlayerWgt.o`, `moc_LocalPlayer.o`, `moc_LocalPlayerWgt.o` and relinked `debug/ECloudAssistant.exe` (33,592,238 bytes, 2026-09-29 19:43:26). No new warnings from the changed files. `git diff --check` exit 0 (CRLF notices only). Manual verification pending in the running client: open a real file, confirm frames render in the video area, empty state hides on load, and a bad/nonexistent path shows the Chinese error in the empty state.
+
+Commit ID: not created in this change. Remaining limitations: playback controls still only issue commands — `position`/`duration`/time text/progress bar are not synced (phase 3.5); seek, volume, playback rate, full error UX and reopen lifecycle are not implemented (phase 3.6). The video widget has no parent until the UI adds it to the stack, so it relies on `LocalPlayerWgt` to take ownership.
+
+Rollback point: restore the single empty-state video layout in `LocalPlayerWgt` and make "打开文件" a local; remove `videoWidget()`, `Open()`, `sig_errorOccurred`, the `QVideoWidget` member and the `mediaStatusChanged`/`errorOccurred` connections from `LocalPlayer`, and restore the former non-idle `StoppedState` guard. No remote-player change is involved.
+
+## Empty video area inherits top-level dark background (本地播放 phase 3.4 follow-up)
+
+Date: 2026-09-29. Goal: after phase 3.4 the empty local-player video area rendered black instead of the shared red→teal page gradient; restore the previous background while real frames are absent.
+
+Root cause: `ECloudAssistant` sets a selector-less `setStyleSheet("background-color: #121212")` (ECloudAssistant.cpp line 59). A selector-less rule propagates to descendant widgets, so any new descendant without its own background rule paints `#121212`. Before 3.4 every widget in the video area had an explicit rule (`QFrame#localVideoSurface{background:transparent}` plus the two labels), so the page gradient showed through; phase 3.4 introduced two new containers — `QStackedWidget#localVideoStack` and the empty-state `QWidget` — that had no rule and therefore inherited the top-level black.
+
+Affected files: `ECloudAssistant/UI/center/LocalPlayerWgt.cpp` and `ECloudAssistant/UI/brown/main.css`.
+
+Behavior: the empty-state page now carries `objectName` `localVideoEmptyPage`, and `main.css` gains `QStackedWidget#localVideoStack,QWidget#localVideoEmptyPage{background:transparent;}` right after the existing `localVideoSurface` rule. The empty state therefore shows the same `Loginer`/`RemoteWgt`/`LocalPlayerWgt` red→teal gradient as before phase 3.4. When a real file is open the `QVideoWidget` page covers the surface, so this rule affects only the empty and error states; letterbox bars around a playing video remain the `QVideoWidget`'s own black, which is expected. No playback or state-machine behavior changed.
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0, `qrc_res.cpp` regenerated for the css edit; `LocalPlayerWgt.o` rebuilt. Manual confirmation of the gradient in the running client pending.
+
+Commit ID: not created in this change. Rollback point: remove the `localVideoEmptyPage` objectName and the added `QStackedWidget#localVideoStack,QWidget#localVideoEmptyPage` rule.
+
+## Basic playback and progress (本地播放 phase 3.5)
+
+Date: 2026-09-29. Goal: make play/pause/stop driven by the real player state and synchronise `position`, `duration`, the time text and the progress bar, per `context/本地播放.md` phase 3.5.
+
+Affected files: `ECloudAssistant/Player/LocalPlayer.{h,cpp}` and `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`. No `.pro`/`.pri` change; remote `AVPlayer`, RTMP, signaling and remote input untouched; no CSS change.
+
+Behavior: `LocalPlayer` now forwards `QMediaPlayer::positionChanged`/`durationChanged` as its own `sig_positionChanged`/`sig_durationChanged`, and caches the values behind new `position()`/`duration()` getters so the UI still never reads `QMediaPlayer` directly. `LocalPlayer::Open(path)` resets the timeline first (`position_ = duration_ = 0`) and re-emits both signals, so a newly opened file cannot briefly show the previous file's position or duration. On the UI side `timeLabel` became the member `timeLabel_`; a new `updateTimeline()` converts `position/duration` into the progress bar's per-mille value (`position * 1000 / duration`, guarded by `duration > 0`) and renders the time text via a file-local `formatDuration()` helper (`mm:ss`, or `h:mm:ss` past an hour) as `position / duration`. `applyLocalPlaybackState()` now also calls `updateTimeline()`, so state and timeline refresh in the same pass; the play/pause button text and all enabled states remain derived from `player_->playbackState()` rather than any UI-side booleans.
+
+Scope note: the progress bar is a pure indicator in phase 3.5 — `setAttribute(Qt::WA_TransparentForMouseEvents)` blocks dragging while its enabled styling still follows `hasMedia`. Dragging and `Seek()` remain phase 3.6 work.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; rebuilt `LocalPlayer.o`, `LocalPlayerWgt.o`, `moc_LocalPlayer.o`, `moc_LocalPlayerWgt.o` and relinked `debug/ECloudAssistant.exe` (33,651,415 bytes, 2026-09-29 20:08:00). No new compiler warnings. `git diff --check` exit 0 (CRLF notices only). Manual verification pending: play/pause/stop a real file and confirm the time text and progress bar advance and reset on stop or on opening another file.
+
+Commit ID: not created in this change. Remaining limitations: no seek (progress bar not draggable), volume and playback rate are still inert, and full error/lifecycle handling is phase 3.6; `position`/`duration` are not reset when a mid-playback error occurs.
+
+Rollback point: remove the two `positionChanged`/`durationChanged` connections, the `position()`/`duration()` getters and the `position_`/`duration_` members from `LocalPlayer`, drop the timeline reset in `Open()`, and remove `updateTimeline()`, `formatDuration()`, the `timeLabel_` member and its two connections from `LocalPlayerWgt`. No remote-player change is involved.
+
+## Progress bar reset to zero on pause (本地播放 phase 3.5 fix)
+
+Date: 2026-09-29. Goal: fix the progress bar snapping back to zero when playback is paused.
+
+Symptom reported in the running client: the progress bar advanced normally while playing and reset to zero on "打开文件" (intended), but also reset to zero on pause. Manual check showed the time text kept its total duration (e.g. `00:12 / 03:45`), so `duration_` stayed valid and only the reported position was cleared.
+
+Root cause: nothing in `LocalPlayerWgt` or `LocalPlayer` resets the timeline on pause — the only zero paths are the deliberate reset in `LocalPlayer::Open()` and the `duration > 0 ? … : 0` guard in `updateTimeline()`. The zero therefore came from the Qt media backend emitting a transient `positionChanged(0)` when the pipeline switches to paused, which `updateTimeline()` faithfully rendered.
+
+Affected file: `ECloudAssistant/Player/LocalPlayer.cpp`. The fix lives in the media layer, not the UI, because deciding whether a reported position is meaningful is a media-layer judgement.
+
+Behavior: the `positionChanged` handler now ignores a reported position of `0` unless the underlying player is actually in `QMediaPlayer::StoppedState`. The check reads `mediaPlayer_->playbackState()` rather than the cached business state so it holds for either signal ordering (before or after `playbackStateChanged(PausedState)`). Stop and opening a new file still reset the bar because those run in `StoppedState`; the explicit timeline reset in `Open()` is unaffected. A transient `positionChanged(0)` while playing is likewise ignored, which is harmless because the cached position is already zero at the start of playback; loop-to-start is not implemented yet, so no visible behaviour regresses. `updateTimeline()` is still called from `applyLocalPlaybackState()` — with the guard in place that render is harmless and still covers duration-only changes.
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; `LocalPlayer.o` rebuilt and `debug/ECloudAssistant.exe` relinked (33,652,131 bytes, 2026-09-29 20:34:16). Manual verification pending: pause should hold the bar at the current position, resume should continue from the same point rather than restart, and stop / open-another-file should still reset the bar and time text to zero.
+
+Commit ID: not created in this change. Remaining limitations: the same transient-zero class of problem is not guarded for `durationChanged`; seek, volume and playback rate remain phase 3.6 work.
+
+Rollback point: restore the unconditional `position_ = position;` assignment in the `positionChanged` handler.
+
+## Show first frame on open (本地播放 phase 3.5 enhancement)
+
+Date: 2026-09-29. Goal: when a file is opened, display its first frame immediately and stay paused, so playback only starts after the user presses "播放".
+
+Affected files: `ECloudAssistant/Player/LocalPlayer.{h,cpp}`. No UI or CSS change.
+
+Behavior: `LocalPlayer` now connects to `videoWidget_->videoSink()`'s `videoFrameChanged`. On `mediaStatusChanged == LoadedMedia` it sets `firstFramePending_` and calls `mediaPlayer_->play()`; as soon as the first decoded frame arrives the handler clears the flag and calls `mediaPlayer_->pause()`, leaving the player paused on that frame. The `playbackStateChanged(PlayingState)` branch is suppressed while `firstFramePending_` is set, so the transient start-up does not leak a "暂停" flash into the play/pause button. `Play()`, `Pause()`, `Stop()` and `Open()` all clear `firstFramePending_`, so an explicit user command always overrides the preview. The player ends in `Paused` rather than `Stopped`, which the UI already treats as "media available", so the play button is enabled and reads "播放".
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; `LocalPlayer.o` rebuilt and `debug/ECloudAssistant.exe` relinked (33,819,011 bytes, 2026-09-29 20:42:28). Manual verification pending: opening a file should paint its first frame with the play button showing "播放", pressing "播放" should start from the beginning, and the progress bar should stay at zero while the preview is held.
+
+Commit ID: not created in this change. Remaining limitations: the preview start-up may produce a very short audio blip on some backends since `play()` runs with the audio output unmuted; letterbox black bars around a playing video are still controlled by the `QVideoWidget` aspect-ratio mode (unchanged in this step).
+
+Rollback point: remove the `videoSink()`/`videoFrameChanged` connection, the `firstFramePending_` member and the `play()` call in the `LoadedMedia` handler, restore the unconditional `UpdatePlaybackState(PlaybackState::Playing)`, and drop the flag clearing in `Play`/`Pause`/`Stop`/`Open`.
+
+## Crop-to-fill video output (本地播放 phase 3.5 enhancement 2)
+
+Date: 2026-09-29. Goal: remove the black letterbox/pillarbox bars around the playing video so the frame fills the whole video area.
+
+Background: the bars are not a defect. `QVideoWidget` defaults to `Qt::KeepAspectRatio`, which fits the source aspect ratio (e.g. 1920x1080) inside a differently shaped control (e.g. 900x600) and paints the leftover region black. The earlier claim that the bars "cannot be changed" was wrong — `QVideoWidget::setAspectRatioMode()` exposes the choice, so all four options (stretch, crop, keep-with-bars, custom painting) were available. The user chose crop-to-fill.
+
+Affected file: `ECloudAssistant/Player/LocalPlayer.cpp`. One added call in the constructor, right after `setVideoOutput()`:
+
+```cpp
+//裁剪铺满：视频按比例放大到铺满整个控件，超出部分裁掉，避免上下或左右出现黑边
+videoWidget_->setAspectRatioMode(Qt::KeepAspectRatioByExpanding);
+```
+
+Behavior: the frame is now scaled up until it covers the control in both dimensions and the overflow is clipped, so no black area remains and the aspect ratio is still correct (no stretching). The trade-off is deliberate: content outside the control is cut off, so a source whose edges carry information — an OSD timestamp, a burned-in caption, a screen-recording taskbar — will lose that edge. The setting lives in the media layer rather than the UI, consistent with `LocalPlayer` owning all `QVideoWidget`/`QMediaPlayer` configuration, and it is applied once in the constructor because `videoWidget_` is created there and `setVideoOutput()` is the only other place it is touched.
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0; `LocalPlayer.o` rebuilt and `debug/ECloudAssistant.exe` relinked (33,819,265 bytes, 2026-09-29 20:46:31). `git diff --check` clean (only pre-existing CRLF warnings). Manual verification pending: play a 16:9 file in the non-16:9 video area and confirm the black bars are gone, the image is not stretched, and the cropped edge content is acceptable.
+
+Build note: this session's shell had `C:\msys64\ucrt64\bin` ahead of the Qt MinGW directory, so `g++` first resolved to the msys2 13.1.0 compiler and the build failed with no diagnostic. Prepending `D:\Qt\Tools\mingw1310_64\bin` to `PATH` fixed it — see the "Build environment: Qt MinGW must precede msys2 on PATH" entry above.
+
+Commit ID: not created in this change. Remaining limitations: the fill mode is fixed at compile time with no UI switch; `Qt::IgnoreAspectRatio` (stretch, distorted) and a custom-painted fill mode with a runtime selector remain the alternatives if this trade-off proves wrong. Phase 3.6 (seek, volume, playback rate) is still unimplemented.
+
+Rollback point: delete the `videoWidget_->setAspectRatioMode(Qt::KeepAspectRatioByExpanding);` call (the default `Qt::KeepAspectRatio` is restored automatically) or change the argument to `Qt::IgnoreAspectRatio` to switch from crop to stretch. No UI, CSS, protocol or server change is involved.
+
+## Seek, volume, playback rate, error fallback and media release (本地播放 phase 3.6)
+
+Date: 2026-09-29. Goal: complete `context/本地播放.md` phase 3.6 — wire the progress slider to real seeking, the volume slider to the audio output, and the speed combo to the playback rate, and close the remaining error and lifecycle gaps (a load failure that never reports, releasing the media source on teardown, and opening a second file while the first is playing).
+
+Affected files: `ECloudAssistant/Player/LocalPlayer.{h,cpp}`, `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`. No UI structure, CSS, protocol or server change — the existing widgets are only reconnected, and the layout is untouched.
+
+Behavior:
+
+- Four new `LocalPlayer` methods, each a thin validated forwarder so the UI still never touches `QMediaPlayer` or `QAudioOutput`: `Seek(qint64)`, `SetVolume(float)`, `SetPlaybackRate(qreal)`, and `Close()`.
+- `Seek()` bounds the target against the cached `duration_`, writes it into `position_`, emits `sig_positionChanged` immediately, and only then calls `setPosition()`. The early emit gives the UI instant feedback and, more importantly, keeps the zero-guard from the previous fix from swallowing a real seek-to-zero: without it the backend's `positionChanged(0)` is dropped, `position_` keeps its old value, and the handle snaps back on the next `updateTimeline()`. A duration of zero means no loaded media, so the call is ignored.
+- `SetVolume()` clamps to `0.0–1.0` before writing to `QAudioOutput::setVolume()`; the linear scale is deliberate (not `QAudio::convertVolume()`), matching the existing 0–100 slider.
+- `SetPlaybackRate()` forwards directly. The speed items are now created with `addItem(text, rate)` and read back through `currentData().toReal()`, so the UI never parses `"1.5x"`; `setCurrentIndex(1)` replaces the former `setCurrentText("1.0x")`.
+- `Close()` switches to `Idle` **first**, then `stop()`, `setSource(QUrl())`, and a timeline reset. The ordering matters: `stop()` emits `StoppedState`, and the existing handler converges `Playing`/`Paused` into `Stopped`, which would re-label an already-closed player as playable if the state had not moved to `Idle` beforehand. The empty source is what actually makes Qt Multimedia release the file and its decode resources, so no audio from the previous file can linger. `~LocalPlayerWgt()` calls it, which covers app exit and page destruction; `player_` is still alive at that point because children are destroyed after the owning widget's destructor body runs.
+- Error fallback: `mediaStatusChanged == InvalidMedia` while still in `Opening` now enters `Error` and reports a generic "无法识别该媒体文件". Qt normally emits `errorOccurred()` as well, so this branch exists only so a failure that reports nothing cannot leave the UI stuck in "loading"; if the specific error arrives afterwards it is still emitted, and because `UpdatePlaybackState(Error)` is already a no-op, the specific Chinese message simply overwrites the generic one in `lastError_`.
+- The progress slider's phase-3.5 `WA_TransparentForMouseEvents` opt-out is gone. Mouse dragging uses `sliderPressed`/`sliderMoved`/`sliderReleased`: the press sets `seeking_`, during which `updateTimeline()` treats the slider value as the single source of truth for the position text so the handle is not yanked back by backend updates; the release clears the flag and submits exactly one `Seek()`, so a drag does not fire a decode per pixel of travel.
+- Keyboard arrows and groove clicks change the slider value without ever raising `sliderMoved`, so a second handler on `valueChanged` covers them. It is gated by a new `updatingSlider_` flag that `updateTimeline()` sets around its programmatic `setValue()`. Without that gate every position update during normal playback would write back into the slider and immediately be reinterpreted as a user seek, turning each ~100 ms tick into a `setPosition()` call.
+- Volume is connected with `valueChanged` (`value / 100.0f`) and then synchronised once after construction so the backend starts at the slider's displayed 80 rather than Qt's default 1.0. Speed is connected the same way on `currentIndexChanged`.
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0 with no warnings; `LocalPlayerWgt.o`, `moc_LocalPlayerWgt.o` and `LocalPlayer.o` all rebuilt and `debug/ECloudAssistant.exe` relinked (33,867,556 bytes, 2026-09-29 21:00:24). `git diff --check` clean (only the pre-existing CRLF warnings). The `moc_LocalPlayerWgt.o` rebuild confirms the new destructor was seen by moc.
+
+Manual verification pending, one scenario per acceptance item: drag the slider to seek while playing and while paused (including to the far left); change volume and confirm it survives opening another file; change speed and confirm it applies immediately; open a corrupt or unsupported file and confirm the Chinese error appears instead of a permanent "loading"; play A and open B mid-playback and confirm only B's audio is heard with the timeline reset; exit while playing and confirm no lingering audio.
+
+Commit ID: not created in this change. Remaining limitations: volume is linear rather than perceptual, so the low end is coarse; opening a file does not reset volume or speed, because both belong to the player rather than to the file; the fill mode is still a compile-time constant; and the phase 3.6 error mapping still covers only the four `QMediaPlayer::Error` values plus the `InvalidMedia` fallback.
+
+Rollback point: revert the four added `LocalPlayer` methods and their declarations, the `InvalidMedia` branch in `mediaStatusChanged`, the destructor and the two new private methods in `LocalPlayerWgt`, the `seeking_`/`updatingSlider_` members, and the `speedCombo_` `addItem`/`currentData` change; then restore `progressSlider_->setAttribute(Qt::WA_TransparentForMouseEvents)` to return to the phase 3.5 display-only slider. No other component is affected.
+
+## Phase 3.6 review fixes before initial playback commit
+
+Date: 2026-09-29. Goal: close lifecycle and state gaps found while reviewing the phase 3.6 implementation before committing it.
+
+Affected files: `ECloudAssistant/Player/LocalPlayer.cpp`, `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`, `context/本地播放.md`, and `context/WORKLOG.md`.
+
+Behavior: leaving the local page now calls `Close()` from `hideEvent()`, since switching `QStackedWidget` pages does not destroy them. `LoadedMedia` starts first-frame preview only when `QMediaPlayer::hasVideo()` is true, so an audio-only file waits for an explicit Play command. An invalid path also stops and clears the previous source. Stop during Opening cancels the load through `Close()`; `InvalidMedia` after loading but before/during preview can still enter Error. Disabling the progress slider on Opening/Idle/Error clears its dragging state, and no seek is sent from a disabled slider. The documentation now distinguishes implemented code from the still-pending full-client runtime acceptance.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` rebuilt `LocalPlayerWgt.o`, `moc_LocalPlayerWgt.o`, `LocalPlayer.o` and linked `debug/ECloudAssistant.exe`, exit 0, with no new warnings. Full-client manual checks remain: audio-only opening should stay silent until Play; navigation away should stop audio and reset the timeline; drag during load/error should not poison the next file; opening another file or a removed path while playing should not leave the old audio; seek, volume, speed, first-frame preview and error messaging should be confirmed with real files.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback point: remove this review's `hasVideo()` gate, page `hideEvent()`, invalid-path source release, Opening Stop cancellation, broadened `InvalidMedia` fallback and slider-state reset; the pre-review phase 3.6 behavior then returns.
