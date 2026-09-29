@@ -23,6 +23,7 @@ include($$PWD/Net/Net.pri)
 include($$PWD/Codec/Codec.pri)
 include($$PWD/Pusher/Pusher.pri)
 include($$PWD/Puller/Puller.pri)
+include($$PWD/Player/Player.pri)
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

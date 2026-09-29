@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QVBoxLayout>
+#include "LocalPlayer.h"
 #include "StyleLoader.h"
 
 LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
@@ -20,6 +21,8 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     QFrame* videoSurface = new QFrame(this);
     videoSurface->setObjectName("localVideoSurface");
     videoSurface->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
+
+    player_ = new LocalPlayer(this);
 
     QLabel* emptyTitle = new QLabel(QString::fromUtf8("尚未打开文件"),videoSurface);
     emptyTitle->setObjectName("localVideoEmptyTitle");
@@ -40,11 +43,11 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     QFrame* controlBar = new QFrame(this);
     controlBar->setObjectName("localControlBar");
 
-    QSlider* progressSlider = new QSlider(Qt::Horizontal,controlBar);
-    progressSlider->setObjectName("localProgressSlider");
-    progressSlider->setRange(0,1000);
-    progressSlider->setValue(0);
-    progressSlider->setEnabled(false);
+    progressSlider_ = new QSlider(Qt::Horizontal,controlBar);
+    progressSlider_->setObjectName("localProgressSlider");
+    progressSlider_->setRange(0,1000);
+    progressSlider_->setValue(0);
+    progressSlider_->setEnabled(false);
 
     QLabel* timeLabel = new QLabel(QStringLiteral("00:00 / 00:00"),controlBar);
     timeLabel->setObjectName("localTimeLabel");
@@ -52,50 +55,50 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     QHBoxLayout* progressLayout = new QHBoxLayout;
     progressLayout->setContentsMargins(0,0,0,0);
     progressLayout->setSpacing(10);
-    progressLayout->addWidget(progressSlider,1);
+    progressLayout->addWidget(progressSlider_,1);
     progressLayout->addWidget(timeLabel);
 
     QPushButton* openButton = new QPushButton(QString::fromUtf8("打开文件"),controlBar);
     openButton->setObjectName("localOpenButton");
 
-    QPushButton* playPauseButton = new QPushButton(QString::fromUtf8("播放"),controlBar);
-    playPauseButton->setObjectName("localPlayPauseButton");
-    playPauseButton->setEnabled(false);
+    playPauseButton_ = new QPushButton(QString::fromUtf8("播放"),controlBar);
+    playPauseButton_->setObjectName("localPlayPauseButton");
+    playPauseButton_->setEnabled(false);
 
-    QPushButton* stopButton = new QPushButton(QString::fromUtf8("停止"),controlBar);
-    stopButton->setObjectName("localStopButton");
-    stopButton->setEnabled(false);
+    stopButton_ = new QPushButton(QString::fromUtf8("停止"),controlBar);
+    stopButton_->setObjectName("localStopButton");
+    stopButton_->setEnabled(false);
 
     QLabel* volumeLabel = new QLabel(QString::fromUtf8("音量"),controlBar);
     volumeLabel->setObjectName("localVolumeLabel");
 
-    QSlider* volumeSlider = new QSlider(Qt::Horizontal,controlBar);
-    volumeSlider->setObjectName("localVolumeSlider");
-    volumeSlider->setRange(0,100);
-    volumeSlider->setValue(80);
-    volumeSlider->setFixedWidth(68);
-    volumeSlider->setEnabled(false);
+    volumeSlider_ = new QSlider(Qt::Horizontal,controlBar);
+    volumeSlider_->setObjectName("localVolumeSlider");
+    volumeSlider_->setRange(0,100);
+    volumeSlider_->setValue(80);
+    volumeSlider_->setFixedWidth(68);
+    volumeSlider_->setEnabled(false);
 
     QLabel* speedLabel = new QLabel(QString::fromUtf8("倍速"),controlBar);
     speedLabel->setObjectName("localSpeedLabel");
 
-    QComboBox* speedCombo = new QComboBox(controlBar);
-    speedCombo->setObjectName("localSpeedCombo");
-    speedCombo->addItems({QStringLiteral("0.5x"),QStringLiteral("1.0x"),QStringLiteral("1.5x"),QStringLiteral("2.0x")});
-    speedCombo->setCurrentText(QStringLiteral("1.0x"));
-    speedCombo->setEnabled(false);
+    speedCombo_ = new QComboBox(controlBar);
+    speedCombo_->setObjectName("localSpeedCombo");
+    speedCombo_->addItems({QStringLiteral("0.5x"),QStringLiteral("1.0x"),QStringLiteral("1.5x"),QStringLiteral("2.0x")});
+    speedCombo_->setCurrentText(QStringLiteral("1.0x"));
+    speedCombo_->setEnabled(false);
 
     QHBoxLayout* actionLayout = new QHBoxLayout;
     actionLayout->setContentsMargins(0,0,0,0);
     actionLayout->setSpacing(8);
     actionLayout->addWidget(openButton);
-    actionLayout->addWidget(playPauseButton);
-    actionLayout->addWidget(stopButton);
+    actionLayout->addWidget(playPauseButton_);
+    actionLayout->addWidget(stopButton_);
     actionLayout->addStretch();
     actionLayout->addWidget(volumeLabel);
-    actionLayout->addWidget(volumeSlider);
+    actionLayout->addWidget(volumeSlider_);
     actionLayout->addWidget(speedLabel);
-    actionLayout->addWidget(speedCombo);
+    actionLayout->addWidget(speedCombo_);
 
     QVBoxLayout* controlLayout = new QVBoxLayout(controlBar);
     controlLayout->setContentsMargins(12,9,12,10);
@@ -110,5 +113,39 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     layout->addWidget(videoSurface,1);
     layout->addWidget(controlBar);
 
+    connect(playPauseButton_,&QPushButton::clicked,this,[this](){
+        if(player_->playbackState() == LocalPlayer::PlaybackState::Playing)
+        {
+            player_->Pause();
+        }
+        else
+        {
+            player_->Play();
+        }
+    });
+    connect(stopButton_,&QPushButton::clicked,player_,&LocalPlayer::Stop);
+    connect(player_,&LocalPlayer::sig_playbackStateChanged,this,[this](LocalPlayer::PlaybackState){
+        applyLocalPlaybackState();
+    });
+    applyLocalPlaybackState();
+
     StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
+}
+
+void LocalPlayerWgt::applyLocalPlaybackState()
+{
+    const LocalPlayer::PlaybackState state = player_->playbackState();
+    const bool hasMedia = state == LocalPlayer::PlaybackState::Playing ||
+                          state == LocalPlayer::PlaybackState::Paused ||
+                          state == LocalPlayer::PlaybackState::Stopped;
+    const bool isPlaying = state == LocalPlayer::PlaybackState::Playing;
+
+    playPauseButton_->setText(isPlaying ? QString::fromUtf8("暂停") : QString::fromUtf8("播放"));
+    playPauseButton_->setEnabled(hasMedia);
+    stopButton_->setEnabled(state == LocalPlayer::PlaybackState::Opening ||
+                            state == LocalPlayer::PlaybackState::Playing ||
+                            state == LocalPlayer::PlaybackState::Paused);
+    progressSlider_->setEnabled(hasMedia);
+    volumeSlider_->setEnabled(hasMedia);
+    speedCombo_->setEnabled(hasMedia);
 }

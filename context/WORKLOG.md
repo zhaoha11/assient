@@ -1015,3 +1015,17 @@ Behavior: `LocalPlayerWgt` now shares the exact qlineargradient selector used by
 Verification: regenerated the Qt resource object, rendered the page with the disposable preview program, and confirmed the gradient spans both the video and control regions. Qt 6.10.1 MinGW 13.1.0 Debug linked `debug/ECloudAssistant.exe` successfully, exit 0. Manual confirmation in the full client remains pending.
 
 Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback point: remove `QWidget#LocalPlayerWgt` from the shared `Loginer`/`RemoteWgt` gradient selector, restore its former white rule, and restore the black `localVideoSurface` plus dark translucent `localControlBar` backgrounds.
+
+## Local playback state bridge (本地播放 phase 3.1)
+
+Date: 2026-09-29. Goal: establish `LocalPlayerWgt → LocalPlayer` as the local-playback control boundary while keeping `AVPlayer` exclusively responsible for remote playback and remote input.
+
+Affected files: new `ECloudAssistant/Player/LocalPlayer.{h,cpp}` and `Player.pri`; `ECloudAssistant/ECloudAssistant.pro`; `ECloudAssistant/Puller/UI/AVPlayer.{h,cpp}`; `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`; `context/本地播放.md`; and `context/WORKLOG.md`.
+
+Behavior: `LocalPlayer` is a non-visual `QObject` with six states (`Idle`, `Opening`, `Playing`, `Paused`, `Stopped`, `Error`), one state-change signal, and play/pause/stop commands. `LocalPlayerWgt` owns this controller and derives its existing control enabled/text state from the controller state. The temporary local constructor, local state and local commands have been removed from `AVPlayer`; its remote constructor, signaling, RTMP startup, input handling and stop path remain its only responsibilities. `PlayerCore` is documented as the future shared media layer but is not created as an empty abstraction in this phase.
+
+Verification: regenerated the qmake project so `Player.pri`, `LocalPlayer.cpp` and `moc_LocalPlayer.cpp` entered the build; Qt 6.10.1 MinGW 13.1.0 Debug then compiled and linked `debug/ECloudAssistant.exe`, exit 0. A disposable `QCoreApplication` state probe passed (exit 0): play from `Idle` produced no transition, followed by `Stopped → Playing → Paused → Stopped`. `git diff --check` is recorded after the final edits. No remote RTMP runtime regression test was performed.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Remaining limitations: `LocalPlayer` is currently a state-only controller. The open-file button, local source, `PlayerCore`, demuxing, decoding, OpenGL rendering, audio output, seeking, volume and speed behavior are not implemented. `Opening` and `Error` are reserved for future asynchronous backend results; starting a demux thread alone will not count as successful playback.
+
+Rollback point: remove the `Player` module include and files, remove the `LocalPlayer` member/connections from `LocalPlayerWgt`, and revert the phase-3.1 plan. `AVPlayer` needs no rollback because the final structure adds no local responsibility to it.
