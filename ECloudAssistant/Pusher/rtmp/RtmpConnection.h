@@ -52,6 +52,7 @@ public:
 private:
     RtmpConnection(TaskScheduler *scheduler, int sockfd, Rtmp* rtmp);
     std::string app_;
+    std::string tc_url_;
     std::string stream_name_;
     std::string stream_path_;
 

@@ -22,6 +22,8 @@ RtmpConnection::RtmpConnection(TaskScheduler *scheduler, int sockfd, Rtmp* rtmp)
     stream_path_ = rtmp->GetStreamPath();
     stream_name_ = rtmp->GetStreamName();
     app_ = rtmp->GetApp();
+    //推流时必须携带 tcUrl，SRS 会校验；自研 RTMP Server 不校验该字段
+    tc_url_ = rtmp->GetTcUrl();
 
     //设置回调函数，处理读数据
     this->SetReadCallback([this](std::shared_ptr<TcpConnection> conn,BufferReader& buffer){
@@ -180,6 +182,8 @@ bool RtmpConnection::Connect()
     amf_encoder_->encodeNumber((double)++number_);
     objects["app"] = AmfObject(app_);
     objects["type"] = AmfObject(std::string("nonprivate"));
+    //只补 tcUrl 这一个必需字段：缺少它时 SRS 直接拒绝整个 connect 包
+    objects["tcUrl"] = AmfObject(tc_url_);
 
     //再将对象编码进去
     amf_encoder_->encodeObjects(objects);

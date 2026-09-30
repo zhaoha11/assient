@@ -142,6 +142,10 @@ public:
 	std::string GetApp() const
 	{ return app_; }
 
+	//tcUrl 是推流地址去掉流名后的部分，形如 rtmp://ip:port/app；SRS 在 connect 阶段要求该字段
+	std::string GetTcUrl() const
+	{ return "rtmp://" + ip_ + ":" + std::to_string(port_) + "/" + app_; }
+
 	std::string GetStreamName() const
 	{ return stream_name_; }
 
