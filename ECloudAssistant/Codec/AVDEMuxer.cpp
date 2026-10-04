@@ -1,6 +1,8 @@
 #include "AVDEMuxer.h"
 #include "H264_Decoder.h"
 #include "AAC_Decoder.h"
+#include "VideoPullStats.h"
+#include <chrono>
 
 AVDEMuxer::AVDEMuxer(AVContext *ac)
     :avContext_(ac)
@@ -98,13 +100,22 @@ void AVDEMuxer::FetchStream(const std::string &path)
     {
         packet = AVPacketPtr(av_packet_alloc(),[](AVPacket* p){av_packet_free(&p);});
         //在开始读取
+        const auto readBegin = std::chrono::steady_clock::now();
         int r = av_read_frame(pFormateCtx_,packet.get());
+        const auto readEnd = std::chrono::steady_clock::now();
+        VideoPullStats::OnReadFrame(std::chrono::duration_cast<std::chrono::microseconds>(
+                                        readEnd - readBegin).count(),
+                                    std::chrono::duration_cast<std::chrono::microseconds>(
+                                        readEnd.time_since_epoch()).count(),
+                                    r == 0 && packet->stream_index == videoIndex);
         if(r == 0) //读取成功
         {
             if(packet->stream_index == videoIndex)//h264数据包
             {
                 //将数据传到这个264解码器队列中
                 h264Decoder_->put_packet(packet);
+                //统计：读包数 + 入队后的压缩包队列峰值
+                VideoPullStats::OnVideoPacketQueued(h264Decoder_->InputQueueSize());
             }
             else if(packet->stream_index == audioIndex)
             {
@@ -189,6 +200,12 @@ double AVDEMuxer::audioDuration()
 double AVDEMuxer::videoDuration()
 {
     return avContext_->videoDuration;
+}
+
+int AVDEMuxer::VideoPacketQueueSize() const
+{
+    //解码器打开失败被 reset 时队列不存在，按空队列返回
+    return h264Decoder_ ? h264Decoder_->InputQueueSize() : 0;
 }
 
 int AVDEMuxer::InterruptFouction(void *arg)

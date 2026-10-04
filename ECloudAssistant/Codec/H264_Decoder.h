@@ -1,4 +1,4 @@
-﻿#ifndef H264_DECODER_H
+#ifndef H264_DECODER_H
 #define H264_DECODER_H
 #include <QThread>
 #include "AV_Common.h"
@@ -13,6 +13,8 @@ public:
     int  Open(const AVCodecParameters* codecParamer);
     inline bool isFull(){return video_queue_.size() > 10;}
     inline void put_packet(const AVPacketPtr packet){video_queue_.push(packet);}
+    //压缩包输入队列当前长度，加锁读取，供跨线程统计抽样
+    inline int InputQueueSize() const {return video_queue_.size();}
 protected:
     void Close();
     virtual void run()override;

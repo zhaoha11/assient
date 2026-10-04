@@ -2,11 +2,13 @@
 #include "AVPlayer.h"
 #include "EventLoop.h"
 #include "SigConnection.h"
+#include "VideoPullStats.h"
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include "defin.h"
 #include <QResizeEvent>
+#include <chrono>
 
 //注册信号
 Q_DECLARE_METATYPE(AVFramePtr)
@@ -126,6 +128,9 @@ void AVPlayer::videoPlay()
     AVFramePtr frame = nullptr;
     while(!stop_ && avDEMuxer_ && avContext_)
     {
+        //每秒汇总一次链路统计；未满一秒时立即返回，不逐帧刷屏
+        VideoPullStats::ReportIfDue(avDEMuxer_->VideoPacketQueueSize(),
+                                    avContext_->video_queue_.size());
         if(avContext_->video_queue_.empty())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -133,7 +138,11 @@ void AVPlayer::videoPlay()
         }
         //pop
         avContext_->video_queue_.pop(frame);
-        sig_repaint(frame);
+        //发送时刻随帧一起进事件队列，Repaint 里据此统计排队等待
+        const qint64 emitUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+        sig_repaint(frame,emitUs);
+        VideoPullStats::OnFrameFetched();
     }
 }
 
@@ -233,6 +242,8 @@ bool AVPlayer::HandleStartStream(const QString &streamAddr)
 {
     //开始拉流
     // qInfo() << "[TRACE-PULL-20260814] start pull" << streamAddr;
+    //新一轮拉流从零开始统计
+    VideoPullStats::Reset();
     if(!avDEMuxer_->Open(streamAddr.toStdString()))
     {
         qWarning() << "failed to start demux thread";

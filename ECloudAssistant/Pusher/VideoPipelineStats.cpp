@@ -36,9 +36,10 @@ void VideoPipelineStats::ResetInterval()
     waitMaxUs_ = 0;
     convertUs_ = 0;
     encodeUs_ = 0;
+    encodedBytes_ = 0;
 }
 
-void VideoPipelineStats::OnFrameEncoded(quint64 sequence, quint64 waitUs, quint64 convertUs, quint64 encodeUs)
+void VideoPipelineStats::OnFrameEncoded(quint64 sequence, quint64 waitUs, quint64 convertUs, quint64 encodeUs, quint64 frameBytes)
 {
     if(!kEnabled)
     {
@@ -65,6 +66,7 @@ void VideoPipelineStats::OnFrameEncoded(quint64 sequence, quint64 waitUs, quint6
     waitUs_ += waitUs;
     convertUs_ += convertUs;
     encodeUs_ += encodeUs;
+    encodedBytes_ += frameBytes;
     if(waitUs > waitMaxUs_)
     {
         waitMaxUs_ = waitUs;
@@ -99,8 +101,11 @@ void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, 
     const quint64 capturedFrames = capturedSequence > lastCapturedSequence_
                                    ? capturedSequence - lastCapturedSequence_ : 0;
 
-    qInfo() << QString("[PIPE-STATS] captureFps = %1 encodeFps = %2 captured = %3 encoded = %4 dup = %5 skip = %6"
-                       " waitAvgUs = %7 waitMaxUs = %8 convertAvgUs = %9 encodeAvgUs = %10 seq = %11")
+    //本窗口编码后的 H.264 码流码率：字节 ×8 转比特，再按窗口实际时长折算 kbps
+    const double bitrateKbps = encodedBytes_ * 8.0 * kMicrosecondsPerSecond / elapsedUs / 1000.0;
+
+    qInfo() << QString("[PIPE-STATS] 采集帧率 = %1 编码帧率 = %2 采集帧数 = %3 编码帧数 = %4 重复 = %5 跳帧 = %6"
+                       " 等待均值us = %7 等待峰值us = %8 转换均值us = %9 编码均值us = %10 码率kbps = %11 序号 = %12")
                    .arg(capturedFrames * kMicrosecondsPerSecond / elapsedUs, 0, 'f', 1)
                    .arg(encodedFrames_ * kMicrosecondsPerSecond / elapsedUs, 0, 'f', 1)
                    .arg(capturedFrames)
@@ -111,6 +116,7 @@ void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, 
                    .arg(waitMaxUs_)
                    .arg(AverageUs(convertUs_, encodedFrames_))
                    .arg(AverageUs(encodeUs_, encodedFrames_))
+                   .arg(bitrateKbps, 0, 'f', 1)
                    .arg(lastEncodedSequence_);
 
     intervalBegin_ = now;

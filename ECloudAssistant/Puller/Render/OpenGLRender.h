@@ -1,4 +1,4 @@
-﻿#ifndef OPENGLRENDER_H
+#ifndef OPENGLRENDER_H
 #define OPENGLRENDER_H
 #include <QLabel>
 #include <QOpenGLWidget>
@@ -18,7 +18,8 @@ public:
     OpenGLRender& operator=(const OpenGLRender&) = delete;
     virtual ~OpenGLRender();
 public:
-    virtual void Repaint(AVFramePtr frame);
+    //emitUs 来自 sig_repaint 的发送时刻，用于统计帧在事件队列的排队等待
+    virtual void Repaint(AVFramePtr frame,qint64 emitUs);
     void GetPosRation(MouseMove_Body& body);
 protected:
     virtual void showEvent(QShowEvent *event);

@@ -15,7 +15,9 @@ public:
     bool Connect(QString ip,uint16_t port,QString code);
     void StopRemote();
 signals:
-    void sig_repaint(AVFramePtr frame);
+    //emitUs 是发送时刻的 steady_clock 微秒时间戳，随帧走队列，
+    //用于统计帧在 Qt 事件队列里的等待（不能共享时间戳，否则积压时测不出来）
+    void sig_repaint(AVFramePtr frame,qint64 emitUs);
 protected:
     void audioPlay();
     void videoPlay();

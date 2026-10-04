@@ -1,9 +1,10 @@
-﻿#include "OpenGLRender.h"
+#include "OpenGLRender.h"
 //添加着色器
 #include <QMovie>
 #include <QShowEvent>
 #include <QResizeEvent>
 #include "defin.h"
+#include "VideoPullStats.h"
 
 static GLfloat vertices[] = {
     1.0f,1.0f,0.0f,1.0f,1.0f,
@@ -52,8 +53,10 @@ OpenGLRender::~OpenGLRender()
 
 }
 
-void OpenGLRender::Repaint(AVFramePtr frame)
+void OpenGLRender::Repaint(AVFramePtr frame, qint64 emitUs)
 {
+    //统计：sig_repaint 到本函数执行的等待，并记录本帧进入渲染的时刻
+    const qint64 repaintUs = VideoPullStats::OnRepaint(emitUs);
     //重绘视频数据
     if(!frame || frame->width == 0 || frame->height == 0)
     {
@@ -70,6 +73,9 @@ void OpenGLRender::Repaint(AVFramePtr frame)
     repaintTexYUV420P(frame);
     //调用这个paintGL()来去绘制
     this->update();//调用这个update()会自动调用这个paintGL
+    //统计：观察 Repaint() 到 paintGL() 是否滞后（多次 update 会被合并，
+    //只保留最后一次进入 Repaint 的时刻）
+    VideoPullStats::OnPaintScheduled(repaintUs);
 }
 
 void OpenGLRender::GetPosRation(MouseMove_Body& body)
@@ -197,6 +203,8 @@ void OpenGLRender::resizeGL(int w, int h)
 
 void OpenGLRender::paintGL()
 {
+    //统计：绘制次数 + 与最近一次 Repaint 的滞后（无未决重绘时只计次数）
+    VideoPullStats::OnPaintGL();
     //重绘制之前清空上一次颜色
     glClear(GL_COLOR_BUFFER_BIT);
 

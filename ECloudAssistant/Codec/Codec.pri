@@ -12,7 +12,8 @@ HEADERS += \
     $$PWD/H264Paraser.h \
     $$PWD/H264_Decoder.h \
     $$PWD/VideoConvert.h \
-    $$PWD/VideoEncoder.h
+    $$PWD/VideoEncoder.h \
+    $$PWD/VideoPullStats.h
 
 SOURCES += \
     $$PWD/AAC_Decoder.cpp \
@@ -24,4 +25,5 @@ SOURCES += \
     $$PWD/H264Paraser.cpp \
     $$PWD/H264_Decoder.cpp \
     $$PWD/VideoConvert.cpp \
-    $$PWD/VideoEncoder.cpp
+    $$PWD/VideoEncoder.cpp \
+    $$PWD/VideoPullStats.cpp

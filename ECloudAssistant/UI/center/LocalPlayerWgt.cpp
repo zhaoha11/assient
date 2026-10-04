@@ -41,6 +41,33 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
 
     player_ = new LocalPlayer(this);
 
+    QWidget* videoSurface = buildVideoArea();
+    QWidget* controlBar = buildControlBar();
+
+    QVBoxLayout* layout = new QVBoxLayout(this);
+    //全尺寸布局：无页面外边距、无区域间距，视频区贴顶，控制栏贴底
+    layout->setContentsMargins(0,0,0,0);
+    layout->setSpacing(0);
+    layout->addWidget(videoSurface,1);
+    layout->addWidget(controlBar);
+
+    bindPlayerSignals();
+
+    applyLocalPlaybackState();
+
+    StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
+}
+
+//页面销毁时释放媒体资源，避免播放中的文件在退出过程中继续出声。
+LocalPlayerWgt::~LocalPlayerWgt()
+{
+    //player_是本控件的子对象，此时仍然有效
+    player_->Close();
+}
+
+//构建视频区：空状态提示与实际画面两页，返回控件交给页面布局。
+QWidget* LocalPlayerWgt::buildVideoArea()
+{
     QFrame* videoSurface = new QFrame(this);
     videoSurface->setObjectName("localVideoSurface");
     videoSurface->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
@@ -76,6 +103,12 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     surfaceLayout->setContentsMargins(0,0,0,0);
     surfaceLayout->addWidget(videoStack_);
 
+    return videoSurface;
+}
+
+//构建底部控制栏：进度、时间、按钮、音量与倍速，返回控件交给页面布局。
+QWidget* LocalPlayerWgt::buildControlBar()
+{
     QFrame* controlBar = new QFrame(this);
     controlBar->setObjectName("localControlBar");
 
@@ -147,13 +180,12 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     controlLayout->addLayout(progressLayout);
     controlLayout->addLayout(actionLayout);
 
-    QVBoxLayout* layout = new QVBoxLayout(this);
-    //全尺寸布局：无页面外边距、无区域间距，视频区贴顶，控制栏贴底
-    layout->setContentsMargins(0,0,0,0);
-    layout->setSpacing(0);
-    layout->addWidget(videoSurface,1);
-    layout->addWidget(controlBar);
+    return controlBar;
+}
 
+//接通控制栏与LocalPlayer的信号，并把音量、倍速的初始值同步到后端。
+void LocalPlayerWgt::bindPlayerSignals()
+{
     connect(openButton_,&QPushButton::clicked,this,&LocalPlayerWgt::openLocalFile);
     connect(playPauseButton_,&QPushButton::clicked,this,[this](){
         if(player_->playbackState() == LocalPlayer::PlaybackState::Playing)
@@ -213,16 +245,6 @@ LocalPlayerWgt::LocalPlayerWgt(QWidget *parent)
     connect(player_,&LocalPlayer::sig_durationChanged,this,[this](qint64){
         updateTimeline();
     });
-    applyLocalPlaybackState();
-
-    StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
-}
-
-//页面销毁时释放媒体资源，避免播放中的文件在退出过程中继续出声。
-LocalPlayerWgt::~LocalPlayerWgt()
-{
-    //player_是本控件的子对象，此时仍然有效
-    player_->Close();
 }
 
 //离开本地播放页时关闭媒体；QStackedWidget切页不会销毁页面。

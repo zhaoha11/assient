@@ -1181,6 +1181,27 @@ Commit ID: not created in this change. Remaining limitations: volume is linear r
 
 Rollback point: revert the four added `LocalPlayer` methods and their declarations, the `InvalidMedia` branch in `mediaStatusChanged`, the destructor and the two new private methods in `LocalPlayerWgt`, the `seeking_`/`updatingSlider_` members, and the `speedCombo_` `addItem`/`currentData` change; then restore `progressSlider_->setAttribute(Qt::WA_TransparentForMouseEvents)` to return to the phase 3.5 display-only slider. No other component is affected.
 
+## Split the local player page constructor into three builders (本地播放, structure only)
+
+Date: 2026-09-29. Goal: make `LocalPlayerWgt` readable without changing any behavior. The constructor had grown to about 180 lines that built the video area, built the whole control bar, wired every signal, and synchronised the initial volume and speed in one uninterrupted block, so reviewing any single concern meant reading the other three.
+
+Decision: no new class, no new file, no new abstraction layer. The player is ~540 lines across the two units, has exactly one consumer, and the pipeline it drives is provided wholesale by Qt Multimedia, so a `PlayerCore`/controller split would only add indirection. `context/本地播放.md` already cancels that plan explicitly, and this change keeps it cancelled. Files stay as they are; only the method boundaries move.
+
+Affected files: `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}` only. Nothing in `Player/`, no QSS, no protocol or server change.
+
+Behavior:
+
+- Three new private methods, all pure code movement. `QWidget* buildVideoArea()` creates the video surface frame, the empty-state page, the stacked widget and the player's video widget, and returns the surface for the root layout. `QWidget* buildControlBar()` creates the progress row, buttons, volume and speed controls and returns the control bar. `void bindPlayerSignals()` holds every `connect` plus the one-shot `SetVolume`/`setPlaybackRateFromCombo` initial synchronisation.
+- The constructor now reads as four steps: create the backend, assemble the root layout from the two returned widgets, connect, then run the first `applyLocalPlaybackState()` and load the stylesheet. The `videoSurface`/`controlBar` locals were previously declared inline; they are now the return values of the builders.
+- Builders return `QWidget*` rather than `QFrame*` so the header needs no new forward declaration for a type the caller never uses.
+- The working tree already carried a separate review pass, recorded in the "Phase 3.6 review fixes before initial playback commit" entry below, which added the `hideEvent()` media release, the `hasVideo()` first-frame gate, invalid-path source clearing, Opening-time Stop cancellation and the slider-state reset. This change is structure only and preserves all of it; the two entries touch overlapping files but no overlapping lines.
+
+Verification: Debug `mingw32-make.exe -f Makefile.Debug -j4` exit 0 with no warnings; `LocalPlayerWgt.o` and `moc_LocalPlayerWgt.o` rebuilt and `debug/ECloudAssistant.exe` relinked (33,873,665 bytes, 2026-09-29 21:41:01). `git diff --check` clean. Widget construction order is unchanged (the empty-state page and the player's video widget are added to the stack in the same order, and the root layout still adds the video surface with stretch 1 and the control bar without), so no visual or layout difference is expected. Manual spot check pending: open the page and confirm the layout, the empty state, and the controls look and behave exactly as before.
+
+Commit ID: not created in this change. Remaining limitations: `LocalPlayerWgt.cpp` is now ~370 lines holding layout, interaction and presentation state in one class; that stays acceptable while the player has one consumer, and the next natural split — if one is ever needed — is on the interaction side (slider/seek state), not on the media side.
+
+Rollback point: inline the three methods back into the constructor body in their original order and drop their declarations from `LocalPlayerWgt.h`. No other file is involved.
+
 ## Phase 3.6 review fixes before initial playback commit
 
 Date: 2026-09-29. Goal: close lifecycle and state gaps found while reviewing the phase 3.6 implementation before committing it.
@@ -1192,3 +1213,94 @@ Behavior: leaving the local page now calls `Close()` from `hideEvent()`, since s
 Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` rebuilt `LocalPlayerWgt.o`, `moc_LocalPlayerWgt.o`, `LocalPlayer.o` and linked `debug/ECloudAssistant.exe`, exit 0, with no new warnings. Full-client manual checks remain: audio-only opening should stay silent until Play; navigation away should stop audio and reset the timeline; drag during load/error should not poison the next file; opening another file or a removed path while playing should not leave the old audio; seek, volume, speed, first-frame preview and error messaging should be confirmed with real files.
 
 Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback point: remove this review's `hasVideo()` gate, page `hideEvent()`, invalid-path source release, Opening Stop cancellation, broadened `InvalidMedia` fallback and slider-state reset; the pre-review phase 3.6 behavior then returns.
+
+## SRS 与自研 RTMP Server 延迟 A/B 方案
+
+Date: 2026-09-29. Goal: prepare a same-host, same-address A/B experiment to test whether replacing the existing RTMP relay with SRS materially reduces end-to-end preview latency.
+
+Affected files: `context/更换推拉流服务器.md` and this worklog. No client, signaling, encoder, puller or server source changed.
+
+Behavior: the plan switches the two RTMP servers sequentially on the existing `192.168.3.130:1935` endpoint, so both clients continue using the unchanged `CREATESTREAM → PLAYSTREAM` URL path. It fixes the runtime conditions, requires a project-publisher/project-puller compatibility check, specifies A→B→B→A visual-delay sampling, and separates stable delay from startup time. The historical 59.33 ms phase-two figure is background context, not this experiment's A baseline. Official SRS realtime configuration is linked; the installed version and exact configuration still need recording before deployment.
+
+Verification: checked the address-generation, signal-forwarding, publish-ready and FFmpeg pull call paths against current source; checked the official SRS realtime example; `git diff --check` passed. No SRS command was found on this Windows PATH, and WSL distro enumeration returned access denied. No SRS deployment, RTMP interoperability run, latency data or bottleneck conclusion is claimed. Commit ID: not created in this change.
+
+Remaining limitation: the actual RTMP server host, SRS process/configuration and two-client capture environment must be available for the planned A/B run. Rollback point: remove the experiment document and this worklog entry; no runtime rollback is needed for this documentation-only change.
+
+## 自研 RTMP Server A 组初测记录
+
+Date: 2026-09-30. Goal: preserve the user-provided PIPE-STATS and approximate visual-delay range before switching to SRS. Affected file: context/更换推拉流服务器.md and this worklog; no code or runtime configuration changed.
+
+Evidence: 12 complete reporting windows total 361 captured and 360 encoded frames; all windows report dup = 0 and skip = 0. The final 31/30 window does not by itself prove a dropped frame. Approximate reported visual delay is 55～80 ms. The incomplete leading 1685" fragment was excluded. The original complete log lines are retained in the experiment document.
+
+Verification: arithmetic checked against the 12 supplied lines; git diff --check passed after the documentation edit. No new build or runtime test was performed. Limitations: server identity/configuration hash, per-sample visual readings and raw imagery are absent, so no median/P90, formal A/B verdict or bottleneck conclusion is claimed. Commit ID: not created. Rollback point: remove this record and its experiment-document subsection.
+
+## RTMP connect carries tcUrl for SRS (SRS A/B, publish-side fix)
+
+Date: 2026-09-30. Goal: fix the first SRS interop failure, where the publisher was rejected before publishing. SRS logs `Invalid RTMP connect packet without tcUrl`, so the publish URL `rtmp://192.168.3.130:1935/live/2` could not enter the normal streaming stage and the client logged `RTMP publish timeout` then `CREATESTREAM ERROR`. The self-built `ENET/RtmpServer` never checked the field, which is why this only surfaced on SRS.
+
+Affected files: `ECloudAssistant/Pusher/rtmp/rtmp.h`, `ECloudAssistant/Pusher/rtmp/RtmpConnection.{h,cpp}`, `context/更换推拉流服务器.md`, and this worklog.
+
+Behavior:
+
+- `Rtmp::GetTcUrl()` added after `GetApp()`; it rebuilds `rtmp://<ip_>:<port_>/<app_>` from the values `ParseRtmpUrl()` already parsed, so the connect layer does not re-parse the URL.
+- `RtmpConnection` gains a `tc_url_` member, set from `Rtmp::GetTcUrl()` in the constructor next to `app_ = rtmp->GetApp();`.
+- `RtmpConnection::Connect()` now writes `objects["tcUrl"] = AmfObject(tc_url_)` alongside the existing `app` and `type`. Only this one required field was added; no other optional connect fields were introduced. `AmfObjects` is an `unordered_map`, so key order inside the packet is not fixed, but SRS looks up keys by name and is unaffected.
+
+Verification: an independent probe (`build/.../probe/tcurl_probe.cpp`, inside the gitignored build directory) encoded the connect object the same way `Connect()` does and decoded it back through the client's own `AmfDecoder` using the same two-step path as `HandleInvoke()`; it read back `tcUrl = rtmp://192.168.3.130:1935/live` matching the expected value (`match=1`), with `app = live` and stream name `2` unchanged. Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` rebuilt `RtmpConnection.o` (2026-09-30 15:16:57) and relinked `debug/ECloudAssistant.exe` (33,887,009 bytes, 15:17:06) with no new warnings; a follow-up make reports nothing to do, confirming the artifacts post-date the edit. `git diff --check` clean.
+
+Commit ID: not created in this change. Remaining limitation: SRS-side interop is not yet run — the SRS log must stop reporting the missing `tcUrl`, the publisher must receive `NetStream.Publish.Start`, and the puller must show the stream. Since the self-built server does not check `tcUrl`, the added field does not affect group A, so both A and B can use the same new client binary, but the old group A samples remain reference-only and must be re-sampled.
+
+Rollback point: remove `Rtmp::GetTcUrl()`, drop the `tc_url_` member and its constructor assignment, and delete the `objects["tcUrl"]` line in `Connect()`. No other file is involved.
+
+## PIPE-STATS reports encoded bitrate in Chinese labels
+
+Date: 2026-09-30. Goal: add the post-encode bitrate to the per-second `[PIPE-STATS]` line and switch the line's labels to Chinese as requested. Previously the line had no throughput figure at all, so the 12000 kbps encoder target could only be checked indirectly through the RTMP server or puller.
+
+Affected files: `ECloudAssistant/Pusher/VideoPipelineStats.{h,cpp}` and `ECloudAssistant/Pusher/RtmpPushManager.cpp`; no protocol, capture or encoding behavior changed.
+
+Behavior:
+
+- `OnFrameEncoded()` gains a `frameBytes` parameter carrying `out_frame.size()`, the encoded H.264 bitstream length of that frame. It may be 0 while the encoder is still buffering; it is simply added to the interval total.
+- `VideoPipelineStats` accumulates `encodedBytes_` per reporting window (cleared in `ResetInterval()` together with the other per-interval totals) and reports `bitrateKbps = encodedBytes_ * 8 / elapsedUs` scaled to the window's real duration in `ReportIfDue()`.
+- The whole `[PIPE-STATS]` line now uses Chinese labels in the same order as before, with the new field inserted before the sequence number: `采集帧率 / 编码帧率 / 采集帧数 / 编码帧数 / 重复 / 跳帧 / 等待均值us / 等待峰值us / 转换均值us / 编码均值us / 码率kbps / 序号`. The `us` unit suffixes stay Latin to avoid mixed-width digits confusion.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug `mingw32-make.exe -f Makefile.Debug -j4` rebuilt `VideoPipelineStats.o`, `RtmpPushManager.o`, `moc_RtmpPushManager.o` and relinked `debug/ECloudAssistant.exe` (33,887,010 bytes, 2026-09-30 15:52:42), exit 0 with no new warnings (the sign-compare and unused-parameter warnings in the output are pre-existing). `git diff --check` clean. Runtime confirmation of the printed bitrate pending the next publish run; expected value is near the 12000 kbps target minus B-frame/buffering effects.
+
+Commit ID: not created in this change. Remaining limitation: the figure covers video only (audio AAC bytes are not counted) and measures the encoder output, not what RTMP actually sent. Rollback point: revert the Chinese label string, remove the `frameBytes` parameter and `encodedBytes_` accumulation, and restore the old `OnFrameEncoded()` call site — four small edits in three files.
+
+## Pull-side per-second pipeline stats ([PULL-STATS], phase-2 task 2)
+
+Date: 2026-09-30. Goal: implement task 2 of `context/解码渲染端延迟处理.md` — instrument the control-side video path (`av_read_frame()` → H.264 packet queue → decode/convert → `avContext_->video_queue_` → `videoPlay()` → `sig_repaint` → `Repaint()` → `paintGL()`) with per-second summaries, without changing any playback behavior, so task 3 can locate the backlog from real data. Same convention as the pusher's `[PIPE-STATS]`.
+
+Affected files: `ECloudAssistant/Codec/VideoPullStats.{h,cpp}` (new), `ECloudAssistant/Codec/AV_Queue.h`, `ECloudAssistant/Codec/H264_Decoder.{h,cpp}`, `ECloudAssistant/Codec/AVDEMuxer.{h,cpp}`, `ECloudAssistant/Codec/Codec.pri`, `ECloudAssistant/Puller/UI/AVPlayer.{h,cpp}`, `ECloudAssistant/Puller/Render/OpenGLRender.{h,cpp}`.
+
+Behavior:
+
+- `VideoPullStats` is a static class with all-atomic state and a `kEnabled` kill switch; the per-second report is printed only from the videoPlay thread as one `[PULL-STATS]` line (读包率/解码率/取帧率/重绘率/绘制率, 包队列当前/峰值, 帧队列当前/峰值, 信号等待均值/峰值ms, 绘制滞后均值/峰值ms). The first call only aligns the reporting window, mirroring `VideoPipelineStats`. `AVPlayer::HandleStartStream()` calls `Reset()` so each new pull session starts from zero.
+- Demux thread: `AVDEMuxer::FetchStream()` counts each video packet and samples the packet-queue peak right after `put_packet()` (post-push is the peak moment) via the new `H264_Decoder::InputQueueSize()`. Decoder thread: `H264_Decoder::run()` counts decoded/converted frames and the `avContext_->video_queue_` peak after each push. videoPlay thread: counts pop/emit (one counter — pop is immediately followed by emit), and samples both queues' current length at report time through `AVDEMuxer::VideoPacketQueueSize()` (returns 0 when the decoder was reset) and `AVQueue::size()`.
+- `sig_repaint` now carries the emit timestamp: `sig_repaint(AVFramePtr frame, qint64 emitUs)` connected to the widened `OpenGLRender::Repaint(AVFramePtr frame, qint64 emitUs)`. `Repaint()` measures the emit→slot wait at entry and passes its entry time to `OnPaintScheduled()` right after `update()`; `paintGL()` measures the Repaint→paintGL lag from that pending stamp (when Qt coalesces multiple updates, the last Repaint wins). The per-frame timestamp is required: a shared "last emit" atomic would read near-zero during exactly the event-queue backlog this phase hunts for, because `videoPlay()` would keep overwriting it while older frames still sit queued.
+- Cross-thread queue reads are now lock-safe: `AVList::empty()/size()` take the same mutex as push/pop (they previously read `size_` unsynchronized, which the existing `videoPlay()` empty-check and decoder spin already did cross-thread). All other statistics state is atomic, so the four calling threads (demux, decoder QThread, videoPlay std::thread, GUI) need no additional locking. Audio path untouched; `LocalPlayer` does not use AVDEMuxer/OpenGLRender, so local preview does not pollute the counters.
+
+Verification: Qt 6.10.1 MinGW 13.1.0 Debug — `qmake.exe -o Makefile ..\..\ECloudAssistant.pro -spec win32-g++ "CONFIG+=debug"` then `mingw32-make.exe -f Makefile.Debug -j8` rebuilt `VideoPullStats.o` (2026-09-30 16:26:25), the touched objects, moc files, and relinked `debug/ECloudAssistant.exe` (34,324,943 bytes, 16:26:44), exit 0; the AVFrame-deprecation/sign-compare/unused-parameter warnings in the output are pre-existing. An initial build failure was environmental: shell PATH resolved `g++` to `C:\msys64\ucrt64\bin` instead of Qt's MinGW 13.1.0; prepending `D:\Qt\Tools\mingw1310_64\bin` fixed it. `git diff --check` clean. Runtime sampling is pending: the `[PULL-STATS]` lines must be captured in a real SRS push-pull run to compare against the pusher's `[PIPE-STATS]` and drive task 3.
+
+Commit ID: not created in this change. Remaining limitation: statistics are compile-verified only; paint-lag averages divide by the paint count even when some paints were resize-triggered without a pending repaint (counts may show 绘制率 > 重绘率 in such windows). Rollback point: delete `VideoPullStats.{h,cpp}` and its call sites, revert `sig_repaint`/`Repaint` to the single-argument form, and restore the lock-free `empty()/size()` — contained edits in the nine files above.
+## Pull-side read wait and video packet arrival interval
+
+Date: 2026-09-30. Goal: add the two requested receive-side timing metrics to the existing per-second `[PULL-STATS]` line before changing any playback behavior.
+
+Affected files: `ECloudAssistant/Codec/AVDEMuxer.cpp`, `ECloudAssistant/Codec/VideoPullStats.{h,cpp}`, and this worklog. The existing `Codec.pri` registration of `VideoPullStats.cpp` is reused.
+
+Behavior: `AVDEMuxer::FetchStream()` measures each `av_read_frame()` call with `steady_clock` and passes its duration and completion timestamp to `VideoPullStats`. The call duration covers FFmpeg's entire read/demux call for video, audio, and failed returns; it is not a pure network waiting measurement. Consecutive successful video packets use their call-completion timestamps to calculate arrival gaps; the first video packet has no gap sample. The previous video arrival survives one-second report windows and is cleared for a new pull session. `[PULL-STATS]` adds average/peak milliseconds for both metrics, once per second, without per-packet logging.
+
+Verification: Qt 6.10.1 MinGW Debug `mingw32-make.exe -f Makefile.Debug -j1` rebuilt and linked `debug/ECloudAssistant.exe`, exit 0. `git diff --check` clean for the tracked source change. Runtime values against SRS are pending; a real pull session is required to interpret whether long calls or packet gaps correlate with visible latency. Commit ID: not created in this change.
+
+Rollback point: remove the timing call around `av_read_frame()`, the new timing counters and report fields in `VideoPullStats`, and this entry; the earlier queue/decode/render statistics remain.
+## Submit pending client diagnostics and local-player layout work
+
+Date: 2026-10-04. Goal: submit the already implemented SRS experiment records, push-side bitrate report, pull-side timing and queue/render diagnostics, and the local-player constructor structure cleanup together with their handoff documents.
+
+Affected files: `ECloudAssistant/Codec/AVDEMuxer.{h,cpp}`, `AV_Queue.h`, `Codec.pri`, `H264_Decoder.{h,cpp}`, `VideoPullStats.{h,cpp}`, `ECloudAssistant/Puller/Render/OpenGLRender.{h,cpp}`, `ECloudAssistant/Puller/UI/AVPlayer.{h,cpp}`, `ECloudAssistant/Pusher/RtmpPushManager.cpp`, `VideoPipelineStats.{h,cpp}`, `ECloudAssistant/UI/center/LocalPlayerWgt.{h,cpp}`, `context/WORKLOG.md`, `context/本地播放.md`, `context/更换推拉流服务器.md`, and `context/解码渲染端延迟处理.md`. The earlier tcUrl source fix is already in local commit `aef1f8c` and is pushed with this submission.
+
+Behavior: this submission packages the behavior described in the detailed worklog entries above. It adds only statistics to the remote playback path, video bitrate to the push statistics, and splits one local-player constructor into three methods without changing playback behavior.
+
+Verification: Qt 6.10.1 MinGW Debug `mingw32-make.exe -f Makefile.Debug -j1` exited 0 on 2026-10-04 (`Nothing to be done for 'first'`), confirming the existing build is up to date; the earlier detailed entries record the actual rebuilds. `git diff --check` was clean. Runtime SRS push/pull statistics and local-player manual acceptance remain pending. Commit ID: this entry's containing commit (resolve with `git log -1 --oneline`). Rollback point: revert this commit to remove the diagnostics and layout cleanup; revert `aef1f8c` separately only if the tcUrl fix itself must be undone.

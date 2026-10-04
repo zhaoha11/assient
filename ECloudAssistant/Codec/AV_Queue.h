@@ -1,4 +1,4 @@
-﻿#ifndef AV_QUEUE_H
+#ifndef AV_QUEUE_H
 #define AV_QUEUE_H
 #include <mutex>
 #include <memory>
@@ -49,8 +49,16 @@ public:
         head_ = tail_ = nullptr;
         size_ = 0;
     }
-    bool empty() const { return size_ == 0; }
-    int size() const { return size_; }
+    //empty/size 会被其它线程（如 videoPlay、统计汇总）跨线程调用，
+    //必须与 push/pop 走同一把锁，否则是无同步的数据竞争
+    bool empty() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return size_ == 0;
+    }
+    int size() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return size_;
+    }
 
 private:
     struct Node {

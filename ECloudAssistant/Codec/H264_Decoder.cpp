@@ -1,5 +1,6 @@
 #include "H264_Decoder.h"
 #include "VideoConvert.h"
+#include "VideoPullStats.h"
 #include<thread>
 H264_Decoder::H264_Decoder(AVContext *ac, QObject *parent)
     :QThread(parent)
@@ -116,6 +117,8 @@ void H264_Decoder::run()
                     // }
                     //添加这个帧到帧队列
                     avContext_->video_queue_.push(outFrame);
+                    //统计：解码输出帧数 + 入队后的帧队列峰值
+                    VideoPullStats::OnFrameDecoded(avContext_->video_queue_.size());
                 }
             }
         }

@@ -1,4 +1,4 @@
-﻿#include "RtmpPushManager.h"
+#include "RtmpPushManager.h"
 #include "GDISreenScapture.h"
 #include <chrono>
 #include "AAC_Encoder.h"
@@ -233,7 +233,8 @@ void RtmpPushManager::EncodeVideo()
             {
                 PushVideo(&out_frame[0],out_frame.size());
             }
-            stats_.OnFrameEncoded(view.sequence,waitUs,timing.convertUs,timing.encodeUs);
+            //把本帧编码后的码流字节数也交给统计，用于折算码率
+            stats_.OnFrameEncoded(view.sequence,waitUs,timing.convertUs,timing.encodeUs,out_frame.size());
         }
         //每秒汇总一次，采集帧数直接从采集端序号取，避免编码线程漏采帧被忽略
         stats_.ReportIfDue(std::chrono::steady_clock::now(),capture->GetCaptureSequence());

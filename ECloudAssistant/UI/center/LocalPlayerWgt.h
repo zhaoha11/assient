@@ -20,6 +20,10 @@ public:
 protected:
     void hideEvent(QHideEvent* event) override;
 private:
+    //构建三部分：视频区、控制栏，以及把两者与LocalPlayer接通
+    QWidget* buildVideoArea();
+    QWidget* buildControlBar();
+    void bindPlayerSignals();
     void applyLocalPlaybackState();
     void updateVideoArea();
     void updateTimeline();
