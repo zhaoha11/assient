@@ -1,4 +1,4 @@
-﻿#ifndef AV_COMMOEN_H
+#ifndef AV_COMMOEN_H
 #define AV_COMMOEN_H
 #include <QtGlobal>
 #include <QDebug>
@@ -53,6 +53,61 @@ struct VideoEncodeTiming
     quint64 encodeUs = 0;
 };
 
+// 解码线程与播放线程之间的视频帧队列，只保留最新一帧。
+// 解码快于渲染时，旧方案会让 video_queue_ 越堆越长，画面离最新状态越来越远；
+// 这里放入新帧时直接替换尚未取走的旧帧，让显示端永远只看到最近解码出的画面。
+// 音频不适用该策略，继续使用普通 FIFO 的 AVQueue。
+// empty/size 会被播放线程跨线程调用，因此与 push/pop 走同一把锁。
+class VideoFrameQueue
+{
+public:
+    // 解码线程：放入一帧。若已有未取走的帧则将其丢弃并返回 true，
+    // 调用方据此统计“帧队列替换数”。
+    bool push(const AVFramePtr& frame)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const bool replaced = static_cast<bool>(frame_);
+        frame_ = frame;
+        return replaced;
+    }
+
+    // 播放线程：取走最新一帧，队列为空时返回 false。
+    bool pop(AVFramePtr& frame)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if(!frame_)
+        {
+            return false;
+        }
+        frame = frame_;
+        frame_.reset();
+        return true;
+    }
+
+    bool empty() const
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return !frame_;
+    }
+
+    // 当前长度，只会是 0 或 1。
+    int size() const
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return frame_ ? 1 : 0;
+    }
+
+    void clear()
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        frame_.reset();
+    }
+
+private:
+    mutable std::mutex mutex_;
+    AVFramePtr frame_ = nullptr;
+};
+
 struct AVContext
 {
 public:
@@ -71,7 +126,8 @@ public:
     AVRational video_dst_timebase;
     AVPixelFormat video_fmt;
     double videoDuration;
-    AVQueue<AVFramePtr> video_queue_;
+    // 视频专用：只保留最新一帧，避免解码快于渲染时持续积压
+    VideoFrameQueue video_queue_;
 
     int avMediatype_ = 0;
 };

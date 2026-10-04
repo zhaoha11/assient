@@ -202,12 +202,6 @@ double AVDEMuxer::videoDuration()
     return avContext_->videoDuration;
 }
 
-int AVDEMuxer::VideoPacketQueueSize() const
-{
-    //解码器打开失败被 reset 时队列不存在，按空队列返回
-    return h264Decoder_ ? h264Decoder_->InputQueueSize() : 0;
-}
-
 int AVDEMuxer::InterruptFouction(void *arg)
 {
     //退出标志

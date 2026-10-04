@@ -1,8 +1,9 @@
-﻿#ifndef AVPLAYER_H
+#ifndef AVPLAYER_H
 #define AVPLAYER_H
 #include "OpenGLRender.h"
 #include "AudioRender.h"
 #include "AVDEMuxer.h"
+#include <atomic>
 
 class EventLoop;
 class SigConnection;
@@ -15,9 +16,10 @@ public:
     bool Connect(QString ip,uint16_t port,QString code);
     void StopRemote();
 signals:
-    //emitUs 是发送时刻的 steady_clock 微秒时间戳，随帧走队列，
-    //用于统计帧在 Qt 事件队列里的等待（不能共享时间戳，否则积压时测不出来）
-    void sig_repaint(AVFramePtr frame,qint64 emitUs);
+    //刷新通知不携带帧，只带会话代号和发出时刻（steady_clock 微秒）：
+    //会话代号让旧会话遗留的排队通知作废，时间戳随通知走事件队列，
+    //用于统计通知在 Qt 事件队列里的等待（共享时间戳在积压时测不出来）
+    void sig_repaint(quint64 sessionId,qint64 emitUs);
 protected:
     void audioPlay();
     void videoPlay();
@@ -34,7 +36,8 @@ private:
     void HandleStopStream();
     bool HandleStartStream(const QString& streamAddr);
 private:
-    bool stop_ = false;
+    //播放线程会读取，停止时由 GUI 线程写入，必须是原子量
+    std::atomic<bool> stop_{false};
     EventLoop* loop_;
     AVContext* avContext_ = nullptr;
     std::shared_ptr<SigConnection> sig_conn_;

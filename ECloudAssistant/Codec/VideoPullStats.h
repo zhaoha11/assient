@@ -3,8 +3,8 @@
 #include <QtGlobal>
 #include <atomic>
 
-// 拉流端视频链路 demux→解码→videoPlay→Repaint/paintGL 的每秒汇总统计，
-// 用于阶段二只加统计不改播放逻辑地定位延迟积压。与推流端 VideoPipelineStats
+// 拉流端视频链路 demux→解码→单槽帧队列→videoPlay→刷新通知→paintGL 的每秒汇总
+// 统计，用于阶段二定位延迟积压并验收任务三的“只显示最新帧”显示策略。与推流端 VideoPipelineStats
 // 同一套约定：kEnabled 置为 false 即完全关闭；阶段五验收完成后整体删除
 // 本文件及其调用点。
 // 调用线程共四个：demux 线程、H264 解码线程、videoPlay 线程、GUI 线程，
@@ -24,24 +24,31 @@ public:
     // 解码线程：一帧解码并转换完成已压入 avContext 的 video_queue_，queueLen 同上。
     static void OnFrameDecoded(int queueLen);
 
-    // videoPlay 线程：已从 video_queue_ 取出一帧并发送 sig_repaint。
+    // 解码线程：新帧替换了尚未被取走的旧帧，即单槽帧队列丢弃一帧。
+    static void OnDecodedFrameDropped();
+
+    // videoPlay 线程：已从 video_queue_ 取出一帧并维护 latestFrame_。
     static void OnFrameFetched();
 
-    // GUI 线程：Repaint() 入口调用。emitUs 是 videoPlay 发送 sig_repaint 的时刻
+    // videoPlay 线程：新帧覆盖了尚未绘制的 latestFrame_。
+    static void OnLatestFrameOverwritten();
+
+    // GUI 线程：刷新通知槽入口调用。emitUs 是 videoPlay 发送刷新通知的时刻
     // （steady_clock 微秒），返回本次进入渲染的时刻，供 OnPaintScheduled 继续传递。
     static qint64 OnRepaint(qint64 emitUs);
 
-    // GUI 线程：Repaint() 调用 update() 之后调用，repaintUs 为 OnRepaint 返回值，
-    // 用于统计 Repaint() 到 paintGL() 的滞后。
+    // GUI 线程：刷新通知槽调用 update() 之后调用，repaintUs 为 OnRepaint 返回值，
+    // 用于统计通知到 paintGL() 的滞后。
     static void OnPaintScheduled(qint64 repaintUs);
 
     // GUI 线程：paintGL() 入口调用。
     static void OnPaintGL();
 
+    // GUI 线程：paintGL() 成功绘制了一帧新解码画面。
+    static void OnFramePainted();
+
     // videoPlay 线程：每轮循环调用，距上次汇总满一秒时输出一行并开始下一周期。
-    // packetQueueLen/frameQueueLen 是输出时刻对压缩包队列和解码帧队列
-    // "当前长度"的安全抽样（走 AVQueue 加锁的 size()）。
-    static void ReportIfDue(int packetQueueLen,int frameQueueLen);
+    static void ReportIfDue();
 
     // 再次开始拉流时调用，清零全部累计状态。
     static void Reset();
@@ -67,9 +74,11 @@ private:
     static std::atomic<qint64> packetQueueMax_;   //压缩包队列本窗口峰值
     static std::atomic<qint64> decodedFrames_;    //解码并转换输出的帧数
     static std::atomic<qint64> frameQueueMax_;    //解码帧队列本窗口峰值
+    static std::atomic<qint64> decodedFrameDrops_;//单槽帧队列替换（丢弃）帧数
     static std::atomic<qint64> fetchedFrames_;    //videoPlay 取帧/发信号帧数
-    static std::atomic<qint64> repaints_;         //Repaint() 执行次数
-    static std::atomic<qint64> paintGLs_;         //paintGL() 执行次数
+    static std::atomic<qint64> latestOverwrites_; //latestFrame_ 被覆盖帧数
+    static std::atomic<qint64> repaints_;         //刷新通知（Repaint 槽）执行次数
+    static std::atomic<qint64> paintedFrames_;    //paintGL() 实际绘制的新帧数
     static std::atomic<qint64> signalWaitUs_;     //sig_repaint 到 Repaint 的累计等待
     static std::atomic<qint64> signalWaitMaxUs_;
     static std::atomic<qint64> paintLagUs_;       //Repaint 到 paintGL 的累计滞后

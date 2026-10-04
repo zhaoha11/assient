@@ -16,9 +16,11 @@ std::atomic<qint64> VideoPullStats::lastVideoPacketUs_{0};
 std::atomic<qint64> VideoPullStats::packetQueueMax_{0};
 std::atomic<qint64> VideoPullStats::decodedFrames_{0};
 std::atomic<qint64> VideoPullStats::frameQueueMax_{0};
+std::atomic<qint64> VideoPullStats::decodedFrameDrops_{0};
 std::atomic<qint64> VideoPullStats::fetchedFrames_{0};
+std::atomic<qint64> VideoPullStats::latestOverwrites_{0};
 std::atomic<qint64> VideoPullStats::repaints_{0};
-std::atomic<qint64> VideoPullStats::paintGLs_{0};
+std::atomic<qint64> VideoPullStats::paintedFrames_{0};
 std::atomic<qint64> VideoPullStats::signalWaitUs_{0};
 std::atomic<qint64> VideoPullStats::signalWaitMaxUs_{0};
 std::atomic<qint64> VideoPullStats::paintLagUs_{0};
@@ -52,9 +54,11 @@ void VideoPullStats::ResetInterval()
     packetQueueMax_.store(0,std::memory_order_relaxed);
     decodedFrames_.store(0,std::memory_order_relaxed);
     frameQueueMax_.store(0,std::memory_order_relaxed);
+    decodedFrameDrops_.store(0,std::memory_order_relaxed);
     fetchedFrames_.store(0,std::memory_order_relaxed);
+    latestOverwrites_.store(0,std::memory_order_relaxed);
     repaints_.store(0,std::memory_order_relaxed);
-    paintGLs_.store(0,std::memory_order_relaxed);
+    paintedFrames_.store(0,std::memory_order_relaxed);
     signalWaitUs_.store(0,std::memory_order_relaxed);
     signalWaitMaxUs_.store(0,std::memory_order_relaxed);
     paintLagUs_.store(0,std::memory_order_relaxed);
@@ -119,14 +123,34 @@ void VideoPullStats::OnFrameDecoded(int queueLen)
     UpdateMax(frameQueueMax_,queueLen);
 }
 
+void VideoPullStats::OnDecodedFrameDropped()
+{
+    if(!kEnabled)
+    {
+        return;
+    }
+    //单槽帧队列里旧帧被新帧替换，即一帧从未被播放线程取走就被丢弃
+    decodedFrameDrops_.fetch_add(1,std::memory_order_relaxed);
+}
+
 void VideoPullStats::OnFrameFetched()
 {
     if(!kEnabled)
     {
         return;
     }
-    //取帧后立即发信号，两者一一对应，记一个数
+    //取帧后立即维护 latestFrame_，两者一一对应，记一个数
     fetchedFrames_.fetch_add(1,std::memory_order_relaxed);
+}
+
+void VideoPullStats::OnLatestFrameOverwritten()
+{
+    if(!kEnabled)
+    {
+        return;
+    }
+    //latestFrame_ 中尚未被 GUI 取走的帧被覆盖；已取走并正在绘制的帧不计入
+    latestOverwrites_.fetch_add(1,std::memory_order_relaxed);
 }
 
 qint64 VideoPullStats::OnRepaint(qint64 emitUs)
@@ -171,10 +195,19 @@ void VideoPullStats::OnPaintGL()
         paintLagUs_.fetch_add(lagUs,std::memory_order_relaxed);
         UpdateMax(paintLagMaxUs_,lagUs);
     }
-    paintGLs_.fetch_add(1,std::memory_order_relaxed);
 }
 
-void VideoPullStats::ReportIfDue(int packetQueueLen, int frameQueueLen)
+void VideoPullStats::OnFramePainted()
+{
+    if(!kEnabled)
+    {
+        return;
+    }
+    //只有真正画出一帧新解码画面才计数，resize 等触发的重复重绘不计入
+    paintedFrames_.fetch_add(1,std::memory_order_relaxed);
+}
+
+void VideoPullStats::ReportIfDue()
 {
     if(!kEnabled)
     {
@@ -197,33 +230,18 @@ void VideoPullStats::ReportIfDue(int packetQueueLen, int frameQueueLen)
         return;
     }
 
-    //均值只统计本窗口内有等待记录的重绘；队列当前长度是输出时刻的抽样
-    const qint64 repaintCount = repaints_.load(std::memory_order_relaxed);
-    const qint64 paintCount = paintGLs_.load(std::memory_order_relaxed);
-    const qint64 readCount = readCalls_.load(std::memory_order_relaxed);
-    const qint64 gapCount = videoGaps_.load(std::memory_order_relaxed);
-
-    qInfo() << QString("[PULL-STATS] 读包率 = %1 解码率 = %2 取帧率 = %3 重绘率 = %4 绘制率 = %5 "
-                       "包队列当前 = %6 包队列峰值 = %7 帧队列当前 = %8 帧队列峰值 = %9 "
-                       "信号等待均值ms = %10 信号等待峰值ms = %11 绘制滞后均值ms = %12 绘制滞后峰值ms = %13 "
-                       "读帧调用均值ms = %14 读帧调用峰值ms = %15 视频包间隔均值ms = %16 视频包间隔峰值ms = %17")
-                   .arg(readPackets_.load(std::memory_order_relaxed) * 1000000.0 / elapsedUs,0,'f',1)
+    //任务三显示策略后的关键判读字段：队列丢帧/覆盖持续大于 0 说明显示侧在落后，
+    //通知率远大于绘制率说明刷新通知被合并（Qt 事件队列或绘制本身跟不上）
+    qInfo() << QString("[PULL-STATS] 解码率 = %1 帧队列峰值 = %2 队列丢帧 = %3 latest覆盖 = %4 "
+                       "通知率 = %5 绘制率 = %6 信号等待峰值ms = %7 绘制滞后峰值ms = %8")
                    .arg(decodedFrames_.load(std::memory_order_relaxed) * 1000000.0 / elapsedUs,0,'f',1)
-                   .arg(fetchedFrames_.load(std::memory_order_relaxed) * 1000000.0 / elapsedUs,0,'f',1)
-                   .arg(repaintCount * 1000000.0 / elapsedUs,0,'f',1)
-                   .arg(paintCount * 1000000.0 / elapsedUs,0,'f',1)
-                   .arg(packetQueueLen)
-                   .arg(packetQueueMax_.load(std::memory_order_relaxed))
-                   .arg(frameQueueLen)
                    .arg(frameQueueMax_.load(std::memory_order_relaxed))
-                   .arg(repaintCount > 0 ? signalWaitUs_.load(std::memory_order_relaxed) / 1000.0 / repaintCount : 0.0,0,'f',1)
+                   .arg(decodedFrameDrops_.load(std::memory_order_relaxed))
+                   .arg(latestOverwrites_.load(std::memory_order_relaxed))
+                   .arg(repaints_.load(std::memory_order_relaxed) * 1000000.0 / elapsedUs,0,'f',1)
+                   .arg(paintedFrames_.load(std::memory_order_relaxed) * 1000000.0 / elapsedUs,0,'f',1)
                    .arg(signalWaitMaxUs_.load(std::memory_order_relaxed) / 1000.0,0,'f',1)
-                   .arg(paintCount > 0 ? paintLagUs_.load(std::memory_order_relaxed) / 1000.0 / paintCount : 0.0,0,'f',1)
-                                      .arg(paintLagMaxUs_.load(std::memory_order_relaxed) / 1000.0,0,'f',1)
-                   .arg(readCount > 0 ? readCallUs_.load(std::memory_order_relaxed) / 1000.0 / readCount : 0.0,0,'f',1)
-                   .arg(readCallMaxUs_.load(std::memory_order_relaxed) / 1000.0,0,'f',1)
-                   .arg(gapCount > 0 ? videoGapUs_.load(std::memory_order_relaxed) / 1000.0 / gapCount : 0.0,0,'f',1)
-                   .arg(videoGapMaxUs_.load(std::memory_order_relaxed) / 1000.0,0,'f',1);
+                   .arg(paintLagMaxUs_.load(std::memory_order_relaxed) / 1000.0,0,'f',1);
 
     intervalBeginUs_.store(nowUs,std::memory_order_relaxed);
     ResetInterval();

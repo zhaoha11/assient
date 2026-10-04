@@ -14,8 +14,6 @@ public:
     bool Open(const std::string& path);
     using StreamCallBack = std::function<void(bool)>;
     inline void SetStreamCallBack(const StreamCallBack& cb){streamCb_ = cb;}
-    //H264 解码器压缩包输入队列的当前长度，加锁读取，供跨线程统计抽样
-    int VideoPacketQueueSize() const;
 protected:
     void Close();
     void FetchStream(const std::string& path);

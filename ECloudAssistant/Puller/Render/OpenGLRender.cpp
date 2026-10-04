@@ -3,6 +3,7 @@
 #include <QMovie>
 #include <QShowEvent>
 #include <QResizeEvent>
+#include <QMetaObject>
 #include "defin.h"
 #include "VideoPullStats.h"
 
@@ -53,29 +54,27 @@ OpenGLRender::~OpenGLRender()
 
 }
 
-void OpenGLRender::Repaint(AVFramePtr frame, qint64 emitUs)
+void OpenGLRender::OnRepaintRequested(quint64 sessionId, qint64 emitUs)
 {
-    //统计：sig_repaint 到本函数执行的等待，并记录本帧进入渲染的时刻
-    const qint64 repaintUs = VideoPullStats::OnRepaint(emitUs);
-    //重绘视频数据
-    if(!frame || frame->width == 0 || frame->height == 0)
+    //上一个会话遗留的排队通知直接忽略，避免绘制到新会话
+    if(!presenter_.OnNotified(sessionId))
     {
         return;
     }
-    //开始绘制的时候去结束
-    if(label_)
-    {
-        label_->hide();
-        delete label_;
-        label_ = nullptr;
-    }
-    //更新yuv纹理
-    repaintTexYUV420P(frame);
-    //调用这个paintGL()来去绘制
+    //统计：刷新通知发出到本函数执行的等待（Qt 事件队列排队时间），
+    //并记录本次安排绘制的时刻，供 paintGL() 计算绘制滞后
+    const qint64 repaintUs = VideoPullStats::OnRepaint(emitUs);
+    //只安排一次绘制并立即返回事件循环；不在 GUI 线程追赶生产者，
+    //真正的取帧/上传纹理/绘制统一在 paintGL() 完成
     this->update();//调用这个update()会自动调用这个paintGL
-    //统计：观察 Repaint() 到 paintGL() 是否滞后（多次 update 会被合并，
-    //只保留最后一次进入 Repaint 的时刻）
     VideoPullStats::OnPaintScheduled(repaintUs);
+}
+
+void OpenGLRender::ResetPresentation()
+{
+    presenter_.Reset();
+    // paintGL() 在 GUI 线程清除旧纹理；排队调用同时覆盖从信令线程触发的停止/重连。
+    QMetaObject::invokeMethod(this,[this](){ update(); },Qt::QueuedConnection);
 }
 
 void OpenGLRender::GetPosRation(MouseMove_Body& body)
@@ -203,10 +202,45 @@ void OpenGLRender::resizeGL(int w, int h)
 
 void OpenGLRender::paintGL()
 {
-    //统计：绘制次数 + 与最近一次 Repaint 的滞后（无未决重绘时只计次数）
+    //统计：绘制次数 + 与最近一次刷新通知的滞后（无未决重绘时只计次数）
     VideoPullStats::OnPaintGL();
     //重绘制之前清空上一次颜色
     glClear(GL_COLOR_BUFFER_BIT);
+
+    const quint64 currentSessionId = presenter_.SessionId();
+    if(textureSessionId_ != currentSessionId)
+    {
+        freeTexYUV420P();
+        textureSessionId_ = currentSessionId;
+    }
+
+    //只有在 paintGL() 里才取最新一帧并上传纹理：此时 GL 上下文才是当前的。
+    //取走快照后立即记为已绘制，不在这里追赶生产者；没有新帧时保留旧纹理，
+    //供 resize 等触发的重绘继续显示
+    AVFramePtr frame = nullptr;
+    quint64 seq = 0;
+    quint64 frameSessionId = 0;
+    const bool newFrame = presenter_.TakeFrameForPaint(frame,seq,frameSessionId)
+                          && frame && frame->width > 0 && frame->height > 0;
+    if(newFrame)
+    {
+        //首帧到达，结束加载动画
+        if(label_)
+        {
+            label_->hide();
+            delete label_;
+            label_ = nullptr;
+        }
+        //更新yuv纹理（尺寸变化时会重建纹理并刷新等比缩放参数）
+        repaintTexYUV420P(frame);
+        textureSessionId_ = frameSessionId;
+    }
+    // 上传期间若发生停止/重连，旧帧不能继续参与本次绘制。
+    if(textureSessionId_ != presenter_.SessionId())
+    {
+        freeTexYUV420P();
+        return;
+    }
 
     //更新视图
     //glViewport 以设备像素为单位，而 m_pos / m_zoomSize 由 resizeGL() 按 Qt 逻辑像素计算，
@@ -231,10 +265,13 @@ void OpenGLRender::paintGL()
     glBindVertexArray(VAO);
 
     //绘制
-    glDrawElements(GL_TRIANGLES,
-                   6,
-                   GL_UNSIGNED_INT,
-                   nullptr);
+    if(texY_ && texU_ && texV_)
+    {
+        glDrawElements(GL_TRIANGLES,
+                       6,
+                       GL_UNSIGNED_INT,
+                       nullptr);
+    }
     glBindVertexArray(0);
 
     //释放纹理
@@ -246,6 +283,10 @@ void OpenGLRender::paintGL()
     }
     //释放这个着色器程序
     program_->release();
+    if(newFrame && presenter_.MarkPainted(seq,frameSessionId))
+    {
+        VideoPullStats::OnFramePainted();
+    }
 }
 
 void OpenGLRender::repaintTexYUV420P(AVFramePtr frame)

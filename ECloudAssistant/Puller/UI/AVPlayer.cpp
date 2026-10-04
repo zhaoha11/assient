@@ -10,9 +10,6 @@
 #include <QResizeEvent>
 #include <chrono>
 
-//注册信号
-Q_DECLARE_METATYPE(AVFramePtr)
-
 AVPlayer::~AVPlayer()
 {
     Close();
@@ -41,12 +38,13 @@ void AVPlayer::Init()
     avDEMuxer_->SetStreamCallBack([](bool){});
     //初始化这个音频播放器
     this->InitAudio(2,44100,16);
-    //绑定信号与槽 去播放视频
-    connect(this,&AVPlayer::sig_repaint,this,&OpenGLRender::Repaint,Qt::QueuedConnection);
+    //绑定信号与槽 去播放视频：跨线程用队列连接投递不含帧的刷新通知
+    connect(this,&AVPlayer::sig_repaint,this,&OpenGLRender::OnRepaintRequested,Qt::QueuedConnection);
 }
 
 void AVPlayer::Close()
 {
+    //先让两条播放线程退出并回收，之后才能安全释放它们引用的 demuxer
     stop_ = true;
     if(audioThread_ && audioThread_->joinable())
     {
@@ -65,6 +63,8 @@ void AVPlayer::Close()
         avDEMuxer_.reset();
         avDEMuxer_ = nullptr;
     }
+    //丢弃最新帧并递增会话代号，使已排队的刷新通知不会绘制到下一次会话
+    ResetPresentation();
 }
 
 bool AVPlayer::Connect(QString ip, uint16_t port, QString code)
@@ -124,25 +124,35 @@ void AVPlayer::audioPlay()
 
 void AVPlayer::videoPlay()
 {
-    //视频播放
+    //视频播放：取最新一帧交给 presenter，由它决定是否需要投递一次刷新通知
     AVFramePtr frame = nullptr;
     while(!stop_ && avDEMuxer_ && avContext_)
     {
         //每秒汇总一次链路统计；未满一秒时立即返回，不逐帧刷屏
-        VideoPullStats::ReportIfDue(avDEMuxer_->VideoPacketQueueSize(),
-                                    avContext_->video_queue_.size());
+        VideoPullStats::ReportIfDue();
         if(avContext_->video_queue_.empty())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        //pop
+        //pop：单槽队列里是当前最新的解码帧
         avContext_->video_queue_.pop(frame);
-        //发送时刻随帧一起进事件队列，Repaint 里据此统计排队等待
+        VideoPullStats::OnFrameFetched();
+        //只更新 latestFrame_；覆盖尚未绘制的旧帧时计入统计
+        const VideoFramePresenter::PublishResult published = Presenter().Publish(frame);
+        if(published.overwritten)
+        {
+            VideoPullStats::OnLatestFrameOverwritten();
+        }
+        if(!published.notify)
+        {
+            //已有未执行的刷新通知，Qt 的 update() 会合并绘制，无需再投递
+            continue;
+        }
+        //发出时刻随通知进事件队列，槽里据此统计通知在事件队列的等待
         const qint64 emitUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-        sig_repaint(frame,emitUs);
-        VideoPullStats::OnFrameFetched();
+        sig_repaint(published.sessionId,emitUs);
     }
 }
 
@@ -242,7 +252,18 @@ bool AVPlayer::HandleStartStream(const QString &streamAddr)
 {
     //开始拉流
     // qInfo() << "[TRACE-PULL-20260814] start pull" << streamAddr;
-    //新一轮拉流从零开始统计
+    //停止/重连后 Close() 已释放 demuxer 并把 stop_ 置位，这里必须重建解封装器、
+    //复位运行标志，否则重连时会空指针或新线程立刻退出
+    if(!avDEMuxer_)
+    {
+        avDEMuxer_.reset(new AVDEMuxer(avContext_));
+        avDEMuxer_->SetStreamCallBack([](bool){});
+    }
+    stop_ = false;
+    //丢弃上一会话遗留的帧与待处理通知，新一轮拉流从零开始统计
+    avContext_->video_queue_.clear();
+    avContext_->audio_queue_.clear();
+    ResetPresentation();
     VideoPullStats::Reset();
     if(!avDEMuxer_->Open(streamAddr.toStdString()))
     {

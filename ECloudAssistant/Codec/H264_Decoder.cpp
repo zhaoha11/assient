@@ -115,8 +115,13 @@ void H264_Decoder::run()
                     //     qInfo() << "[TRACE-PULL-20260814] decoded first video frame" << outFrame->width << "x" << outFrame->height;
                     //     loggedFirstFrame = true;
                     // }
-                    //添加这个帧到帧队列
-                    avContext_->video_queue_.push(outFrame);
+                    //放入只保留最新一帧的帧队列；返回值表示是否替换掉了尚未被取走的旧帧
+                    const bool replaced = avContext_->video_queue_.push(outFrame);
+                    if(replaced)
+                    {
+                        //统计：单槽帧队列的替换数
+                        VideoPullStats::OnDecodedFrameDropped();
+                    }
                     //统计：解码输出帧数 + 入队后的帧队列峰值
                     VideoPullStats::OnFrameDecoded(avContext_->video_queue_.size());
                 }
