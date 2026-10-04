@@ -196,6 +196,8 @@ void SigConnection::DoObtainStream(const packet_head *data)
 {
     ObtainStreamReply_body reply;
     CreateStream_body create_reply;  // 发给被控端：让它创建推流
+    if(data->len >= sizeof(ObtainStream_body))
+        create_reply.captureBackend = ((ObtainStream_body*)data)->captureBackend == 1 ? 1 : 0;
     std::string code = ((ObtainStream_body*)data)->GetId();
     TcpConnection::Ptr conn = ConnectionManager::GetInstance()->QueryConn(code);
     if(!conn)

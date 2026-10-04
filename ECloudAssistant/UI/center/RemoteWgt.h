@@ -3,6 +3,7 @@
 #include <QLineEdit>
 #include <QWidget>
 #include <QPushButton>
+#include <QComboBox>
 #include <functional>
 #include "RemoteManager.h"
 
@@ -23,6 +24,7 @@ private:
     QLineEdit* selfCodeEdit_;
     QLineEdit* rmoteCodeEdit_;
     QPushButton* startRmoteBtn_;
+    QComboBox* captureBackendCombo_;
     std::unique_ptr<RemoteManager> manager_;
     DeviceStatusCallback deviceStatusCallback_;
 };

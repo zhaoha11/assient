@@ -67,7 +67,7 @@ void AVPlayer::Close()
     ResetPresentation();
 }
 
-bool AVPlayer::Connect(QString ip, uint16_t port, QString code)
+bool AVPlayer::Connect(QString ip, uint16_t port, QString code, uint8_t captureBackend)
 {
     TcpSocket tcp_socket;
     tcp_socket.Create();
@@ -79,10 +79,11 @@ bool AVPlayer::Connect(QString ip, uint16_t port, QString code)
     qDebug() << "连接信令服务器成功";
     //生成一个信令连接器
     sig_conn_.reset(new SigConnection(loop_->GetTaskSchduler().get(),tcp_socket.GetSocket(),code,SigConnection::CONTROLLING));//控制端
+    sig_conn_->SetCaptureBackend(captureBackend);
     sig_conn_->SetStopStreamCallBack([this](){
         this->HandleStopStream();
     });
-    sig_conn_->SetStartStreamCallBack([this](const QString& streamAddr){
+    sig_conn_->SetStartStreamCallBack([this](const QString& streamAddr, uint8_t){
         return this->HandleStartStream(streamAddr);
     });
     if(sig_conn_->Start() != 0)

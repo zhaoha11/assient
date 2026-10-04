@@ -8,6 +8,7 @@
 
 class RemoteManager : public RtmpPushManager
 {
+    Q_OBJECT
 public:
     using DeviceStatusCallback = std::function<void(const QString &, const QString &, const QString &)>;
     ~RemoteManager();
@@ -19,9 +20,11 @@ public:
 public:
    void Init(const QString& sigIp,uint16_t port,const QString& code,const DeviceStatusCallback& statusCallback = {});
     void StartRemote(const QString& sigIp,uint16_t port,const QString& code);
+signals:
+    void captureBackendStarted(int backend);
 protected:
     void HandleStopStream();
-    bool HandleStartStream(const QString& streamAddr);
+    bool HandleStartStream(const QString& streamAddr, uint8_t captureBackend);
 private:
     void Close();
 private:

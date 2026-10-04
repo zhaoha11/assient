@@ -1,5 +1,6 @@
 #include "RemoteWgt.h"
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QDebug>
 #include "StyleLoader.h"
 
@@ -13,6 +14,7 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     selfCodeEdit_ = new QLineEdit(this);
     rmoteCodeEdit_ = new QLineEdit(this);
     startRmoteBtn_ = new QPushButton(QString("开始远程"),this);
+    captureBackendCombo_ = new QComboBox(this);
     manager_.reset(new RemoteManager());
 
     selfCodeEdit_->setReadOnly(true);
@@ -21,6 +23,9 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     selfCodeEdit_->setObjectName("selfCodeEdit");
     rmoteCodeEdit_->setObjectName("remoteCodeEdit");
     startRmoteBtn_->setObjectName("remoteBtn");
+    captureBackendCombo_->setObjectName("captureBackendCombo");
+    captureBackendCombo_->addItem(QString::fromUtf8("采集方式：GDI"));
+    captureBackendCombo_->addItem(QString::fromUtf8("采集方式：WGC"));
 
     selfCodeEdit_->setPlaceholderText(QString("本机识别码"));
     rmoteCodeEdit_->setPlaceholderText(QString("远程识别码"));
@@ -30,11 +35,25 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     layout->addWidget(selfCodeEdit_,0,Qt::AlignCenter);
     layout->addSpacing(30);
     layout->addWidget(rmoteCodeEdit_,1,Qt::AlignCenter);
-    layout->addWidget(startRmoteBtn_,2,Qt::AlignCenter);
+    QHBoxLayout* remoteActions = new QHBoxLayout;
+    remoteActions->addStretch();
+    remoteActions->addWidget(startRmoteBtn_);
+    remoteActions->addSpacing(12);
+    remoteActions->addWidget(captureBackendCombo_);
+    remoteActions->addStretch();
+    layout->addLayout(remoteActions,2);
     layout->addStretch(1);
     setLayout(layout);
 
     StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
+
+    connect(captureBackendCombo_,&QComboBox::currentIndexChanged,this,[this](int index){
+        manager_->SetCaptureBackend(index == 1 ? RtmpPushManager::CaptureBackend::WGC
+                                               : RtmpPushManager::CaptureBackend::GDI);
+    });
+    connect(manager_.get(),&RemoteManager::captureBackendStarted,this,[this](int backend){
+        captureBackendCombo_->setCurrentIndex(backend);
+    },Qt::QueuedConnection);
 
     connect(startRmoteBtn_,&QPushButton::clicked,this,[this](){
         //开始远程

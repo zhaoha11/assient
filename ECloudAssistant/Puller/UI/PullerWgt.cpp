@@ -24,9 +24,9 @@ PullerWgt::PullerWgt(EventLoop* loop,QWidget *parent)
     setCentralWidget(central);
 }
 
-bool PullerWgt::Connect(QString ip, uint16_t port, QString code)
+bool PullerWgt::Connect(QString ip, uint16_t port, QString code, uint8_t captureBackend)
 {
-    return player_->Connect(ip,port,code);
+    return player_->Connect(ip,port,code,captureBackend);
 }
 
 void PullerWgt::closeEvent(QCloseEvent *event)

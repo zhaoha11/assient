@@ -256,6 +256,7 @@ bool GDIScreenCapture::WaitLatestFrame(CaptureFrameView& frame)
 
     //front 只由本线程写入索引，采集线程不会碰它，锁外读取内容是安全的
     const CaptureFrameBuffer& front = frameBuffers_[frontIndex_];
+    frame.owner.reset();
     frame.data = front.data.data();
     frame.width = front.width;
     frame.height = front.height;

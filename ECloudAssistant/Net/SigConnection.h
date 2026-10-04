@@ -33,10 +33,11 @@ public:
     inline bool isNone(){return state_ == NONE;}
     using JoinResultCallBack = std::function<void(bool)>;
     using StopStreamCallBack = std::function<void()>;
-    using StartStreamCallBack = std::function<bool(const QString& streamAddr)>;
+    using StartStreamCallBack = std::function<bool(const QString& streamAddr, uint8_t captureBackend)>;
     inline void SetJoinResultCallBack(const JoinResultCallBack& cb){joinResultCb_=cb;}
     inline void SetStartStreamCallBack(const StartStreamCallBack& cb){startStreamCb_ = cb;}
     inline void SetStopStreamCallBack(const StopStreamCallBack& cb){stopStreamCb_ = cb;}
+    void SetCaptureBackend(uint8_t backend) { captureBackend_ = backend == 1 ? 1 : 0; }
 protected:
     bool OnRead(BufferReader& buffer);
     void OnClose();
@@ -64,10 +65,11 @@ private:
     QString targetCode_ = "";
     int joinRetryCount_ = 0;
     const UserType type_;
+    uint8_t captureBackend_ = 0;
     QScreen* screen_ = nullptr;
     JoinResultCallBack joinResultCb_=[](bool){};
     StopStreamCallBack stopStreamCb_ = [](){};
-    StartStreamCallBack startStreamCb_ = [](const QString&)->bool{return true;};
+    StartStreamCallBack startStreamCb_ = [](const QString&, uint8_t)->bool{return true;};
     std::unique_ptr<std::thread> eventthread_ = nullptr;
 };
 #endif // SIGCONNECTION_H

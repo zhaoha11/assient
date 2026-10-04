@@ -35,6 +35,9 @@ QPushButton#login_Btn:pressed,QPushButton#remoteBtn:pressed
 {
 background-color: rgb(17,171,164);
 }
+QComboBox#captureBackendCombo{min-width:150px;max-width:150px;min-height:40px;max-height:40px;padding:0 8px;font:10pt "Microsoft YaHei";color:#ffffff;background-color:#283638;border:1px solid rgb(20,196,188);border-radius:5px;}
+QComboBox#captureBackendCombo::drop-down{width:20px;border:none;}
+QComboBox#captureBackendCombo QAbstractItemView{color:#ffffff;background-color:#283638;selection-background-color:rgb(20,196,188);}
 
 QPushButton#close_Btn,#min_Btn{
 min-height:30px;

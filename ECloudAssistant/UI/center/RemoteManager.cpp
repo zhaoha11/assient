@@ -34,8 +34,8 @@ void RemoteManager::Init(const QString &sigIp, uint16_t port,const QString& code
     sig_conn_->SetStopStreamCallBack([this](){
         this->HandleStopStream();
     });
-    sig_conn_->SetStartStreamCallBack([this](const QString& streamAddr){
-        return this->HandleStartStream(streamAddr);
+    sig_conn_->SetStartStreamCallBack([this](const QString& streamAddr, uint8_t captureBackend){
+        return this->HandleStartStream(streamAddr,captureBackend);
     });
     if(sig_conn_->Start() != 0)
     {
@@ -52,7 +52,8 @@ void RemoteManager::StartRemote(const QString &sigIp, uint16_t port, const QStri
     pullerWgt_.reset(new PullerWgt(event_loop_.get(),nullptr));
     pullerWgt_->show();
     //创建一个拉流器开始连接
-    if(!pullerWgt_->Connect(sigIp,port,code))
+    if(!pullerWgt_->Connect(sigIp,port,code,
+            GetCaptureBackend() == CaptureBackend::WGC ? 1 : 0))
     {
         qDebug() << "远程连接失败";
         return;
@@ -66,10 +67,16 @@ void RemoteManager::HandleStopStream()
     RtmpPushManager::Close();
 }
 
-bool RemoteManager::HandleStartStream(const QString &streamAddr)
+bool RemoteManager::HandleStartStream(const QString &streamAddr, uint8_t captureBackend)
 {
     //开始推流
+    SetCaptureBackend(captureBackend == 1 ? CaptureBackend::WGC : CaptureBackend::GDI);
     const bool opened = this->Open(streamAddr);
+    if(opened)
+    {
+        SetCaptureBackend(GetActiveCaptureBackend());
+        emit captureBackendStarted(GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
+    }
     return opened;
 }
 

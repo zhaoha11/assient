@@ -10,15 +10,19 @@
 
 class AACEncoder;
 class AudioCapture;
-class GDIScreenCapture;
+class ScreenCapture;
 class RtmpPushManager : public QObject
 {
     Q_OBJECT
 public:
+    enum class CaptureBackend { GDI, WGC };
     virtual ~RtmpPushManager();
     RtmpPushManager();
 public:
     bool Open(const QString& str);
+    void SetCaptureBackend(CaptureBackend backend) { captureBackend_.store(backend); }
+    CaptureBackend GetCaptureBackend() const { return captureBackend_.load(); }
+    CaptureBackend GetActiveCaptureBackend() const { return activeCaptureBackend_; }
     bool isClose(){return !isConnect.load();}
 protected:
     bool Init();
@@ -31,6 +35,8 @@ protected:
     void PushVideo(const quint8* data, quint32 size);
     void PushAudio(const quint8* data, quint32 size);
 private:
+    std::atomic<CaptureBackend> captureBackend_{CaptureBackend::GDI};
+    CaptureBackend activeCaptureBackend_{CaptureBackend::GDI};
     std::atomic_bool exit_{false};
     std::atomic_bool isConnect{false};
     EventLoop* loop_ = nullptr;
@@ -38,7 +44,7 @@ private:
     std::unique_ptr<H264Encoder> h264_encoder_;
     std::shared_ptr<RtmpPublisher> pusher_;
     std::unique_ptr<AudioCapture> audio_Capture_;
-    std::unique_ptr<GDIScreenCapture> screen_Capture_;
+    std::unique_ptr<ScreenCapture> screen_Capture_;
     std::unique_ptr<std::thread>  audioCaptureThread_ = nullptr;
     std::unique_ptr<std::thread>  videoCaptureThread_ = nullptr;
     //只在视频编码线程使用

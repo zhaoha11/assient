@@ -160,6 +160,7 @@ qint32 SigConnection::obtainStream()
         }
         ObtainStream_body body;
         body.SetId(targetCode_.toStdString());
+        body.captureBackend = captureBackend_;
         this->Send((const char*)&body,body.len);
         return 0;
     }
@@ -231,7 +232,7 @@ void SigConnection::doPlayStream(const packet_head* data)
             qDebug() << "开始播放流";
             if(startStreamCb_)
             {
-                startStreamCb_(QString::fromStdString(playStream->GetstreamAddres()));
+                startStreamCb_(QString::fromStdString(playStream->GetstreamAddres()),captureBackend_);
             }
         }
         else
@@ -250,12 +251,14 @@ void SigConnection::doCtreatStream(const packet_head* data)
         CreateStreamReply_body reply;
         //准备一个流地址
         QString streamAddr = "rtmp://192.168.3.130:1935/live/" + QString::number(++streamIndex);
+        const uint8_t backend = data->len >= sizeof(CreateStream_body)
+                                    ? static_cast<const CreateStream_body*>(data)->captureBackend : 0;
         qInfo() << "CREATESTREAM received, url =" << streamAddr;
         //开始推流
         if(startStreamCb_)
         {
             //传到外部，由这个推流器开始推流 ,是否推流成功
-            const bool pushOpened = startStreamCb_(streamAddr);
+            const bool pushOpened = startStreamCb_(streamAddr,backend == 1 ? 1 : 0);
             if(pushOpened)
             {
                 //推流成功

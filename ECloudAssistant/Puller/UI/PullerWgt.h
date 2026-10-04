@@ -10,7 +10,7 @@ class PullerWgt : public QMainWindow
     Q_OBJECT
 public:
     explicit PullerWgt(EventLoop* loop,QWidget *parent = nullptr);
-    bool Connect(QString ip,uint16_t port,QString code);
+    bool Connect(QString ip,uint16_t port,QString code,uint8_t captureBackend);
 protected:
     void closeEvent(QCloseEvent *event) override;
 private:

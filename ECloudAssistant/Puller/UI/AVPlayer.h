@@ -13,7 +13,7 @@ class AVPlayer : public OpenGLRender ,public AudioRender
 public:
     ~AVPlayer();
     explicit AVPlayer(EventLoop* loop,QWidget* parent = nullptr);
-    bool Connect(QString ip,uint16_t port,QString code);
+    bool Connect(QString ip,uint16_t port,QString code,uint8_t captureBackend);
     void StopRemote();
 signals:
     //刷新通知不携带帧，只带会话代号和发出时刻（steady_clock 微秒）：

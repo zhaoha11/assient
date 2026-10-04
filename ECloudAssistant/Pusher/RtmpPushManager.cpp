@@ -1,5 +1,7 @@
 #include "RtmpPushManager.h"
 #include "GDISreenScapture.h"
+#include "WGCScreenCapture.h"
+#include "ScreenCapture.h"
 #include <chrono>
 #include "AAC_Encoder.h"
 #include "H264Encoder.h"
@@ -83,8 +85,25 @@ bool RtmpPushManager::Init()
 
     //创建视频采集
     //准备“原始画面来源”和“压缩器”。
-    screen_Capture_.reset(new GDIScreenCapture()); //采集器采集的像素要跟这个编码器初始化一致
-    if(!screen_Capture_->Init())
+    bool captureReady = false;
+    activeCaptureBackend_ = CaptureBackend::GDI;
+    if(captureBackend_.load() == CaptureBackend::WGC)
+    {
+        screen_Capture_.reset(new WGCScreenCapture());
+        captureReady = screen_Capture_->Init();
+        if(captureReady) activeCaptureBackend_ = CaptureBackend::WGC;
+        if(!captureReady)
+        {
+            qWarning() << "WGC init failed, falling back to GDI";
+            screen_Capture_.reset();
+        }
+    }
+    if(!screen_Capture_)
+    {
+        screen_Capture_.reset(new GDIScreenCapture());
+        captureReady = screen_Capture_->Init();
+    }
+    if(!captureReady)
     {
         qWarning() << "screen capture init failed";
         return false;
@@ -194,7 +213,7 @@ void RtmpPushManager::EncodeVideo()
 {
     stats_.Reset();
     //线程运行期间 screen_Capture_ 不会被 reset，取一次裸指针避免每轮判空
-    GDIScreenCapture* capture = screen_Capture_.get();
+    ScreenCapture* capture = screen_Capture_.get();
     CaptureFrameView view;
     //编码 PTS 以本次编码线程的首帧为原点，重新推流时自然从 0 重新对齐
     quint64 firstSequence = 0;
@@ -217,6 +236,9 @@ void RtmpPushManager::EncodeVideo()
         {
             firstSequence = view.sequence;
             hasFirstSequence = true;
+            qInfo() << "[CAPTURE] session first frame, backend ="
+                    << (activeCaptureBackend_ == CaptureBackend::WGC ? "WGC" : "GDI")
+                    << "size =" << view.width << "x" << view.height;
         }
         const qint64 framePts = static_cast<qint64>(view.sequence - firstSequence);
 

@@ -9,6 +9,8 @@ HEADERS += \
     $$PWD/capture/AudioBuffer.h \
     $$PWD/capture/AudioCapture.h \
     $$PWD/capture/GDISreenScapture.h \
+    $$PWD/capture/ScreenCapture.h \
+    $$PWD/capture/WGCScreenCapture.h \
     $$PWD/capture/WASAPICapture.h \
     $$PWD/rtmp/RtmpChunk.h \
     $$PWD/rtmp/RtmpConnection.h \
@@ -24,6 +26,7 @@ SOURCES += \
     $$PWD/VideoPipelineStats.cpp \
     $$PWD/capture/AudioCapture.cpp \
     $$PWD/capture/GDISreenScapture.cpp \
+    $$PWD/capture/WGCScreenCapture.cpp \
     $$PWD/capture/WASAPICapture.cpp \
     $$PWD/rtmp/RtmpChunk.cpp \
     $$PWD/rtmp/RtmpConnection.cpp \
@@ -39,4 +42,6 @@ LIBS += -lws2_32 \
         -lgdi32 \
         -luser32 \
         -lole32 \
-        -lksuser
+        -lksuser \
+        -ld3d11 \
+        -lruntimeobject

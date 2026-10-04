@@ -8,26 +8,14 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "ScreenCapture.h"
 struct AVFrame;
 struct AVPacket;
 struct AVInputFormat;
 struct AVCodecContext;
 struct AVFormatContext;
 
-// 编码线程持有的只读视图。data 指向三缓冲中的 front，缓冲区由本类持有。
-// 有效期到下一次 WaitLatestFrame() 或 Close() 为止；调用方不得保存、释放或异步使用。
-struct CaptureFrameView
-{
-    const quint8* data = nullptr;
-    quint32 width = 0;
-    quint32 height = 0;
-    quint32 stride = 0;
-    quint32 size = 0;
-    quint64 sequence = 0;
-    std::chrono::steady_clock::time_point capturedAt;
-};
-
-class GDIScreenCapture : public QThread
+class GDIScreenCapture : public QThread, public ScreenCapture
 {
 public:
     GDIScreenCapture();
@@ -35,18 +23,18 @@ public:
     GDIScreenCapture& operator=(const GDIScreenCapture&) = delete;
     virtual ~GDIScreenCapture();
 public:
-    virtual quint32 GetWidth() const;
-    virtual quint32 GetHeight() const;
-    virtual bool Init(qint64 display_index = 0);
+    quint32 GetWidth() const override;
+    quint32 GetHeight() const override;
+    bool Init(qint64 display_index = 0) override;
     // 阻塞到有新画面可用，返回 false 表示已停止。
-    virtual bool WaitLatestFrame(CaptureFrameView& frame);
+    bool WaitLatestFrame(CaptureFrameView& frame) override;
     // 只置停止标志并唤醒等待者：幂等、不 join、不释放缓冲池。
     // 必须在消费者线程 join 之前调用，否则消费者会永久阻塞在条件变量上。
-    virtual void RequestStop();
+    void RequestStop() override;
     // 停止采集线程并释放三块缓冲区。不能在消费者仍持有 CaptureFrameView 时调用。
-    virtual bool Close();
+    bool Close() override;
     // 已产出的采集帧总数，与 CaptureFrameView::sequence 同源，供低频统计读取。
-    virtual quint64 GetCaptureSequence() const;
+    quint64 GetCaptureSequence() const override;
 protected:
     virtual void run() override;
 private:
