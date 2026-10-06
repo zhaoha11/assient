@@ -1,6 +1,5 @@
 ﻿#include "BufferWriter.h"
 #include <string.h>
-#include <unistd.h>
 #include "TcpSocket.h"
 #include <errno.h>
 #include <stdio.h>

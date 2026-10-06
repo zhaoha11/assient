@@ -7,7 +7,8 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vector>
+
+class D3D11SharedContext;
 
 class WGCScreenCapture : public ScreenCapture
 {
@@ -18,28 +19,33 @@ public:
     WGCScreenCapture& operator=(const WGCScreenCapture&) = delete;
 
     bool Init(qint64 display_index = 0) override;
-    bool WaitLatestFrame(CaptureFrameView& frame) override;
+    bool WaitLatestFrame(VideoFrame& frame) override;
     void RequestStop() override;
     bool Close() override;
     quint32 GetWidth() const override { return width_.load(); }
     quint32 GetHeight() const override { return height_.load(); }
     quint64 GetCaptureSequence() const override { return captureSequence_.load(); }
 
+    // WGC 同时支持 CPU 读回与 GPU 纹理直出；默认保持 CPU 读回。
+    bool SupportsGpuOutput() const override { return true; }
+    bool SetOutput(CaptureOutput output) override;
+    // 注入与硬件编码共用的 device 后，采集帧与其纹理落在同一 device 上，才能被 VideoProcessor 消费
+    bool SetExternalDevice(D3D11SharedContext* device) override;
+
 private:
     void Run();
-    void Publish(std::shared_ptr<const std::vector<quint8>> pixels, quint32 width, quint32 height,
-                 quint64 sequence);
+    void Publish(const VideoFrame& frame, quint64 sequence);
 
     std::thread worker_;
     std::atomic<bool> stop_{false};
     std::atomic<quint32> width_{0};
     std::atomic<quint32> height_{0};
     std::atomic<quint64> captureSequence_{0};
-    std::shared_ptr<const std::vector<quint8>> latestPixels_;
-    quint32 latestWidth_ = 0;
-    quint32 latestHeight_ = 0;
-    quint64 latestSequence_ = 0;
-    std::chrono::steady_clock::time_point latestCapturedAt_;
+    std::atomic<CaptureOutput> captureOutput_{CaptureOutput::CpuReadback};
+    // 外部共享 device（可空）。空时 WGC 自建一个，仅供 CPU 读回路径使用。
+    std::atomic<D3D11SharedContext*> externalDevice_{nullptr};
+    // 单槽位最新帧：CPU 帧持 owner，GPU 帧持 gpu 句柄，均保证取用期间有效。
+    VideoFrame latestFrame_;
     std::mutex mutex_;
     std::condition_variable frameReady_;
     std::condition_variable workerWake_;

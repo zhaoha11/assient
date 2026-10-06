@@ -5,15 +5,15 @@
 - Local branch: `main`
 - Latest implementation commit: `b854c07 feat: isolate control sessions and enforce single controller`
 - Working-tree expectation after this record is committed: clean.
-- Client build command:
+- Client kit: Qt 6.10.1 MSVC 2022 x64 with Windows SDK 10.0.26100. Run from an MSVC x64 Developer Command Prompt in the client build directory:
 
-  ```powershell
-  $env:PATH='D:\Qt\6.10.1\mingw_64\bin;D:\Qt\Tools\mingw1310_64\bin;' + $env:PATH
-  & 'D:\Qt\Tools\mingw1310_64\bin\mingw32-make.exe' -f Makefile.Debug -j4
+  ```bat
+  D:\Qt\6.10.1\msvc2022_64\bin\qmake.exe -o Makefile ..\..\ECloudAssistant.pro -spec win32-msvc CONFIG+=debug CONFIG+=qml_debug
+  nmake /f Makefile.Debug
   ```
 
-- Client build directory: `ECloudAssistant/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug`
-- Client result: the full Debug build and link succeeded on 2026-08-14.
+- Client build directory: `ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug`
+- Client result: MSVC Debug qmake plus jom compiled and linked `debug/ECloudAssistant.exe` on 2026-10-05.
 - Server build must run in the VMware Linux environment:
 
   ```bash
@@ -1365,3 +1365,51 @@ Behavior: the controller adds a one-byte backend choice (0=GDI, 1=WGC) to OBTAIN
 Verification: regenerated the Qt 6.10.1 MinGW 13.1.0 Debug Makefile and linked the client, exit 0; the server `define.h` and modified `SigConnection.cpp` passed MinGW C++11 syntax checks; client and server protocol structs both passed compile-time size checks (OBTAINSTREAM 15 bytes, CREATESTREAM 5 bytes); `git diff --check` passed. The existing `ENET/build` cache points to `/mnt/hgfs/...` and `/usr/bin/gmake`, so server link and two-client runtime propagation remain unverified. No commit created. Deployment requires rebuilding and replacing the SigServer binary along with both clients. Rollback: remove the two wire bytes and forwarding, restore the prior start-stream callbacks/UI synchronization, and remove the per-session log.
 
 Submission (2026-10-04): commit ID is the containing commit for this entry (`git log -1 --format=%H -- context/WORKLOG.md` immediately after commit). Submitted scope includes the capture abstraction, WGC backend, UI selection, one-byte SigServer forwarding, per-session first-frame log, and the WGC experiment document. The unrelated whitespace edit in `WASAPICapture.cpp` and unrelated untracked files are excluded. Server rebuild/deployment and two-client live propagation remain pending.
+
+## MSVC capture migration in primary checkout
+
+Date: 2026-10-05. Goal: resolve the Qt Creator MSVC build failure in `D:\shared\assient` and apply the already verified C++/WinRT capture migration from the isolated Codex worktree. Affected files: `ECloudAssistant/Net/{BufferWriter,TcpConnection}.cpp`, `ECloudAssistant/Pusher/Pusher.pri`, `ECloudAssistant/Pusher/capture/WGCScreenCapture.cpp`, `context/WGC采集.md`, and this worklog. Behavior: removed two unused `unistd.h` includes, replaced handwritten MinGW WGC interfaces and UUIDs with SDK C++/WinRT types, and linked `windowsapp.lib` for MSVC. Existing capture format, GDI selection/fallback and signaling packets were not changed. Unrelated existing edits were preserved.
+
+Verification: regenerated the Qt 6.10.1 MSVC 2022 Debug Makefile in `ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug`; `jom /f Makefile.Debug -j4` completed and linked `debug/ECloudAssistant.exe`, exit 0. The same migrated WGC code previously passed two `Init`/frame/`Close` cycles in the isolated worktree; GDI fetched one BGRA frame there. Commit ID: none. Remaining limitations: no two-client RTMP test, runtime WGC-to-GDI fallback test, resize/monitor-change test or long-run comparison in this primary checkout. Rollback: restore these four source/project files to `a1998f8` and use the MinGW kit.
+
+## MSVC Debug executable local deployment
+
+Date: 2026-10-05. Goal: make the primary checkout's MSVC Debug client launch by double-clicking its exe. Affected files: this worklog; generated runtime DLLs and Qt plugin directories under ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug/debug (ignored build output). Behavior: deployed Qt 6.10.1 MSVC Debug libraries and plugins with windeployqt --debug --no-translations --compiler-runtime, then copied the six FFmpeg 6 DLLs directly imported by ECloudAssistant.exe from D:\FFmpeg\ffmpeg-6.0-full_build-shared\bin. No project source changed for this deployment.
+
+Verification: before deployment, double-click showed missing Qt6Widgetsd.dll; dumpbin confirmed the Qt Debug and FFmpeg DLL imports. windeployqt exited 0. After deployment, the exe stayed running for five seconds in a smoke test with PATH limited to Windows system directories; the test process was then stopped. Commit ID: none. Remaining limitation: interactive login, capture, playback, and running on another PC were not tested. windeployqt warned that dxcompiler.dll/dxil.dll and VCINSTALLDIR were unavailable; the five-second launch did not require them. Rebuilding the build directory may require redeployment.
+
+
+## WGC capture function comments
+
+Date: 2026-10-05. Goal: add Chinese explanations to the WGC capture functions for source reading. Affected files: `ECloudAssistant/Pusher/capture/WGCScreenCapture.cpp` and this worklog. Behavior: comments describe WGC setup, frame readback, worker synchronization, latest-frame publication, restart and cadence; executable code and protocol behavior are unchanged. Verification: MSVC Debug `jom /f Makefile.Debug -j4` recompiled `WGCScreenCapture.cpp` and linked `ECloudAssistant.exe`, exit 0; `git diff --check` passed on the two affected files. An initial build invocation failed because its command-line PATH assignment hid `cl`; retrying from the MSVC developer environment succeeded. Commit ID: none. Remaining limitation: runtime behavior was not retested for comment-only changes. Rollback: remove these comments and this entry.
+
+## Capture frame abstraction refactor and WGC GPU texture output (WGC phase 2)
+
+Date: 2026-10-05. Goal: let a capture frame carry either a CPU BGRA buffer or a D3D11 texture, so WGC can hand out `ID3D11Texture2D` directly and the capture/encoder boundary no longer forces every backend to produce CPU memory. This phase is a data-structure and interface refactor only — no GPU BGRA→NV12, no NVENC/QSV/AMF, no zero-copy. Acceptance covers architecture and lifetime, not performance.
+
+Affected files: `ECloudAssistant/Codec/VideoFrame.h` (new), `ECloudAssistant/Codec/Codec.pri`, `ECloudAssistant/Codec/H264Encoder.{h,cpp}`, `ECloudAssistant/Pusher/capture/ScreenCapture.h`, `ECloudAssistant/Pusher/capture/GDISreenScapture.{h,cpp}`, `ECloudAssistant/Pusher/capture/WGCScreenCapture.{h,cpp}`, `ECloudAssistant/Pusher/RtmpPushManager.{h,cpp}`, `context/WGC采集.md`, and this worklog. `Pusher.pri` was not changed.
+
+Behavior: the new platform-free `VideoFrame.h` defines `VideoFrameKind{Cpu,Gpu}`, `VideoPixelFormat{Bgra8,Nv12,Unknown}`, an abstract `IGpuVideoFrame` handle (`width/height/format/nativeTexture()/nativeDevice()`, all native resources as `void*`), `CpuFrameView` (owner/data/stride) and `VideoFrame` (kind + cpu + gpu shared_ptr + width/height/sequence/capturedAt); D3D11 is interpreted only inside `WGCScreenCapture.cpp`. `ScreenCapture::WaitLatestFrame` now takes `VideoFrame&`, and the interface adds `CaptureOutput{CpuReadback,GpuTexture}` plus `SupportsGpuOutput()/SetOutput()` defaulting to unsupported, which GDI inherits. GDI only fills the CPU fields (kind Cpu, `cpu.data` into the front of its three-buffer pool, empty owner); its index-swap logic is unchanged. WGC gained an output mode (default `CpuReadback`); in GPU mode it `CopyResource`s the pool texture into a per-frame owned `D3D11_USAGE_DEFAULT` texture, wraps it in `WgcGpuFrame` (which holds both `ComPtr<ID3D11Texture2D>` and `ComPtr<ID3D11Device>` for lifetime safety) and releases the pool frame immediately — the pool texture is not held because the two-buffer pool would otherwise starve `TryGetNextFrame`. The staging/Map/memcpy readback path is kept verbatim as the fallback. `H264Encoder` gained `EncodeFrame` (dispatches on `kind`), `EncodeCpuFrame` (the existing software path) and `EncodeGpuFrame` (a stub that logs once and returns -1). `RtmpPushManager::EncodeVideo` now uses `VideoFrame` and `EncodeFrame` with no backend branches, and a new `SetCaptureOutput` passthrough (default `CpuReadback`) is applied inside `Init()` before `screen_Capture_->Init()`. GPU output mode is code-only for now: it is not wired to the UI or signaling and is not the default.
+
+Verification: Qt 6.10.1 MSVC2022 Debug `qmake` + `jom /f Makefile.Debug -j4` compiled and linked `debug/ECloudAssistant.exe`, exit 0, no errors (pre-existing warnings only). A launch smoke test passed (process started, stayed alive, terminated cleanly). Not verified: the acceptance cases that need a signaling server plus SRS and two clients — GDI streaming, stable WGC `D3D11Texture2D` acquisition, WGC CPU-readback streaming, and repeated Stop/Restart (20x) — were not run on this machine, nor were runtime resolution/DPI/monitor changes or long-run behavior. Commit ID: none. Rollback: revert the listed files to `a1998f8`; the new `VideoFrame.h` and `Codec.pri` entry are additive and can be dropped with the other edits.
+
+## Software/hardware H.264 encoder coexistence (WGC phase 3, step 1)
+
+Date: 2026-10-05. Goal: let the push session choose between the software libx264 encoder and a hardware H.264 encoder (nvenc/qsv/amf) while the input is still a CPU BGRA frame, falling back to software when no hardware encoder opens. This is step 1 of phase 3; the WGC D3D11 texture goes straight into the hardware encoder only in step 2. No GPU BGRA→NV12, no `AVHWFramesContext`, no zero-copy here.
+
+Affected files: `ECloudAssistant/Codec/VideoEncoder.{h,cpp}`, `ECloudAssistant/Codec/SoftwareVideoEncoder.{h,cpp}` (new), `ECloudAssistant/Codec/HardwareVideoEncoder.{h,cpp}` (new), `ECloudAssistant/Codec/H264Encoder.{h,cpp}`, `ECloudAssistant/Codec/Codec.pri`, `ECloudAssistant/Pusher/RtmpPushManager.{h,cpp}`, `context/WGC采集.md`, and this worklog.
+
+Behavior: `VideoEncoder` is now an abstract base holding the parts software and hardware share — FFmpeg context creation, the CPU BGRA→target-pixel-format conversion, send/receive and the SPS/PPS extradata. `Open` is a template method that calls two hooks: `FindCodec` (by ID for software, by name for hardware) and `ConfigureCodec` (output pixel format, profile/level, private options). `SoftwareVideoEncoder` carries the previous libx264 behavior verbatim: `AV_PIX_FMT_YUV420P`, `FF_PROFILE_H264_BASELINE`, level 40, `rc_min/max/buffer = bitrate`, `tune=zerolatency`, `preset=ultrafast`. `HardwareVideoEncoder` takes a codec name, looks it up with `avcodec_find_encoder_by_name`, sets `AV_PIX_FMT_NV12` (the base converter targets `codecContext_->pix_fmt`, so nothing else changes) and sets per-vendor low-latency options (`h264_nvenc` preset p1 / tune ull, `h264_qsv` preset veryfast / async_depth 1, `h264_amf` usage ultralowlatency / quality speed); it deliberately does not copy x264's profile/level or rate-control fields. `H264Encoder::OPen` takes a new `VideoEncoderKind{Software,Hardware}`, defaulting to `Software`; when `Hardware` is requested it tries `h264_nvenc → h264_qsv → h264_amf` in order and falls back to software if none opens, logging the encoder that actually took effect (`[ENCODE] active encoder = ...`). `RtmpPushManager` gained `SetEncoderKind/GetEncoderKind` (default `Software`, so existing behavior is unchanged) and passes it into `OPen`. The per-frame dispatch stays exactly where it was: `H264Encoder::EncodeFrame` branches once on `VideoFrameKind`; there is no software/hardware branch per frame. Audio remains AAC software encoding, untouched.
+
+Verification: Qt 6.10.1 MSVC2022 Debug, regenerated the Makefile with `qmake -o Makefile ..\..\ECloudAssistant.pro` and ran `jom /f Makefile.Debug -j4` — compiled the new `SoftwareVideoEncoder.cpp`/`HardwareVideoEncoder.cpp` and the refactored `VideoEncoder.cpp`, recompiled dependents, and linked `debug/ECloudAssistant.exe`, exit 0; a second incremental run reported nothing to do and exit 0 (pre-existing warnings only). Not verified: whether `h264_nvenc`/`h264_qsv`/`h264_amf` actually open on this machine (needs a matching GPU and driver), and any end-to-end streaming with a hardware encoder (needs signaling server + SRS + two clients). The default `Software` path was not re-run at runtime. Commit ID: none. Rollback: revert the listed files to `a1998f8`; the two new encoder classes and the `Codec.pri` entries are additive and can be dropped with the other edits.
+
+
+## WGC GPU 直通与运行时软编退化
+
+Date: 2026-10-06. Goal: complete the WGC low-latency path by sharing the capture D3D11 device with NVENC, avoiding GPU-to-CPU readback on the hardware path, and rebuilding the push session with software encoding after a runtime video-path failure. Affected files: `ECloudAssistant/Codec/{AV_Common.h,Codec.pri,H264Encoder.{h,cpp},VideoEncoder.{h,cpp},D3D11SharedContext.{h,cpp},HardwareVideoEncoder.{h,cpp},SoftwareVideoEncoder.{h,cpp},VideoFrame.h}`, `ECloudAssistant/Net/{BufferWriter,TcpConnection}.cpp`, `ECloudAssistant/Pusher/{Pusher.pri,RtmpPushManager.{h,cpp},capture/ScreenCapture.h,capture/GDISreenScapture.{h,cpp},capture/WGCScreenCapture.{h,cpp}}`, `ECloudAssistant/UI/center/RemoteManager.{h,cpp}`, `context/WGC采集.md`, and this worklog.
+
+Behavior: WGC GPU textures use the shared D3D11 device and D3D11 VideoProcessor to prepare NV12 frames for NVENC without CPU readback. If GPU initialization fails, startup falls back through WGC CPU readback plus x264 and then GDI plus x264. If the active hardware path fails during a session, the manager closes it and reopens once with software encoding; a later session again prefers the GPU path. NVENC low-delay options set `zerolatency=1` and `delay=0`; the shared D3D context lock is limited to D3D resource/view work.
+
+Verification: the project WGC experiment record documents a 1920x1080 local A/B run: WGC+NVENC end-to-end 50-70 ms and GDI+x264 44-67 ms (59.33 ms mean), with zero GPU-to-CPU readback on the WGC hardware route. Earlier in this work session, GPU NVENC and CPU x264 publish/decode probes each completed three start/stop cycles. No new build or test was run for this upload request. Runtime failure recovery on a live two-client session remains to be confirmed.
+
+Commit ID: this entry's containing commit (resolve with `git log -1 --format=%H -- context/WORKLOG.md`).

@@ -44,4 +44,7 @@ LIBS += -lws2_32 \
         -lole32 \
         -lksuser \
         -ld3d11 \
+        -ldxgi \
         -lruntimeobject
+
+win32-msvc: LIBS += windowsapp.lib

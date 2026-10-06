@@ -13,6 +13,9 @@ RemoteManager::RemoteManager()
 {
     //创建事件循环
     event_loop_.reset(new EventLoop(2));
+    // 信号由编码线程发出，用队列连接投递到本对象所在线程执行
+    connect(this,&RtmpPushManager::videoPathFailed,this,&RemoteManager::HandleVideoPathFailed,
+            Qt::QueuedConnection);
 }
 
 void RemoteManager::Init(const QString &sigIp, uint16_t port,const QString& code,const DeviceStatusCallback& statusCallback)
@@ -64,12 +67,14 @@ void RemoteManager::StartRemote(const QString &sigIp, uint16_t port, const QStri
 void RemoteManager::HandleStopStream()
 {
     //停止推流
+    lastStreamAddr_.clear();
     RtmpPushManager::Close();
 }
 
 bool RemoteManager::HandleStartStream(const QString &streamAddr, uint8_t captureBackend)
 {
     //开始推流
+    lastStreamAddr_ = streamAddr;
     SetCaptureBackend(captureBackend == 1 ? CaptureBackend::WGC : CaptureBackend::GDI);
     const bool opened = this->Open(streamAddr);
     if(opened)
@@ -78,6 +83,31 @@ bool RemoteManager::HandleStartStream(const QString &streamAddr, uint8_t capture
         emit captureBackendStarted(GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
     }
     return opened;
+}
+
+// 会话级退化：不在某一帧上换编码器，而是停掉当前推流、以软编路径整条重建。只降一级。
+void RemoteManager::HandleVideoPathFailed()
+{
+    if(lastStreamAddr_.isEmpty())
+    {
+        return;
+    }
+    qWarning() << "[PUSH] video path failed at runtime, rebuilding session with software encoder";
+    RtmpPushManager::Close();
+    // 强制软编：重开时 Init 会跳过 GPU 直通档，落到 CPU 读回 + 软编
+    SetEncoderKind(VideoEncoderKind::Software);
+    const bool opened = this->Open(lastStreamAddr_);
+    // 恢复默认，下次启动仍会优先尝试 GPU 直通（硬编若仍坏会再次退化）
+    SetEncoderKind(VideoEncoderKind::Hardware);
+    if(opened)
+    {
+        SetCaptureBackend(GetActiveCaptureBackend());
+        emit captureBackendStarted(GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
+    }
+    else
+    {
+        qWarning() << "[PUSH] software rebuild failed, push stopped";
+    }
 }
 
 void RemoteManager::Close()

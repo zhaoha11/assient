@@ -20,7 +20,7 @@ constexpr AVPixelFormat kCapturePixelFormat = AV_PIX_FMT_BGRA;
 
 //采集与编码统一的目标帧率。采集端的 gdigrab framerate、编码器的 time_base
 //以及约 1 秒的 GOP 都由它派生，避免出现多套帧率口径。
-constexpr qint32 kTargetFramerate = 30;
+constexpr qint32 kTargetFramerate = 60;
 
 typedef struct VIDEOCONFIG
 {

@@ -1,5 +1,4 @@
 ﻿#include "TcpConnection.h"
-#include <unistd.h>
 #include "Channel.h"
 
 TcpConnection::TcpConnection(TaskScheduler *task_schduler, int sockfd)

@@ -25,11 +25,15 @@ signals:
 protected:
     void HandleStopStream();
     bool HandleStartStream(const QString& streamAddr, uint8_t captureBackend);
+    // 运行中视频编码路径失败：停止当前推流并以软编路径重建一次会话
+    void HandleVideoPathFailed();
 private:
     void Close();
 private:
     std::unique_ptr<PullerWgt> pullerWgt_;
     std::unique_ptr<EventLoop> event_loop_;
     std::shared_ptr<SigConnection> sig_conn_;
+    // 记住最近一次推流地址，运行中退化重建会话时要用它重开
+    QString lastStreamAddr_;
 };
 #endif // REMOTEMANAGER_H

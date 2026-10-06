@@ -26,14 +26,14 @@ public:
     quint32 GetWidth() const override;
     quint32 GetHeight() const override;
     bool Init(qint64 display_index = 0) override;
-    // 阻塞到有新画面可用，返回 false 表示已停止。
-    bool WaitLatestFrame(CaptureFrameView& frame) override;
+    // 阻塞到有新画面可用，返回 false 表示已停止。始终输出 CPU BGRA。
+    bool WaitLatestFrame(VideoFrame& frame) override;
     // 只置停止标志并唤醒等待者：幂等、不 join、不释放缓冲池。
     // 必须在消费者线程 join 之前调用，否则消费者会永久阻塞在条件变量上。
     void RequestStop() override;
-    // 停止采集线程并释放三块缓冲区。不能在消费者仍持有 CaptureFrameView 时调用。
+    // 停止采集线程并释放三块缓冲区。不能在消费者仍持有上一帧 VideoFrame 时调用。
     bool Close() override;
-    // 已产出的采集帧总数，与 CaptureFrameView::sequence 同源，供低频统计读取。
+    // 已产出的采集帧总数，与 VideoFrame::sequence 同源，供低频统计读取。
     quint64 GetCaptureSequence() const override;
 protected:
     virtual void run() override;

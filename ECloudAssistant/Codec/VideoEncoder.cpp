@@ -1,5 +1,5 @@
-﻿#include "VideoEncoder.h"
-#include "VideoConvert.h"
+#include "VideoEncoder.h"
+#include <QDebug>
 #include <chrono>
 
 extern "C"
@@ -38,8 +38,15 @@ bool VideoEncoder::Open(AVConfig &video_config)
 
     config_ = video_config;
 
-    //查找编码器H264
-    codec_ = const_cast<AVCodec*>(avcodec_find_encoder(AV_CODEC_ID_H264));
+    // Open 会被「候选编码器依次尝试」多次调用，这里先释放上一次的上下文；
+    // 否则每次重试都新建一份，只有 EncodBase 析构时才回收，中间全部泄漏。
+    if(codecContext_)
+    {
+        avcodec_free_context(&codecContext_);
+    }
+
+    //查找编码器：具体用哪个交给子类决定
+    codec_ = const_cast<AVCodec*>(FindCodec());
     if(!codec_)
     {
         Close();
@@ -54,7 +61,7 @@ bool VideoEncoder::Open(AVConfig &video_config)
         return false;
     }
 
-    //配置上下文参数
+    //软硬编共享的基础参数；像素格式/档位/私有选项由 ConfigureCodec 决定
     codecContext_->width = config_.video.width;
     codecContext_->height = config_.video.height;
     codecContext_->time_base = {1,(qint32)config_.video.framerate};//帧率倒数
@@ -63,24 +70,16 @@ bool VideoEncoder::Open(AVConfig &video_config)
     //否则改帧率会无声地改变 I 帧的时间间隔
     codecContext_->gop_size = config_.video.gop;
     codecContext_->max_b_frames = 0;//降低延迟
-    codecContext_->pix_fmt = AV_PIX_FMT_YUV420P;
-    //必须写 BASELINE：libx264 不映射 FF_PROFILE_H264_CONSTRAINED_BASELINE，
-    //写后者会落到 default 分支被静默忽略，编码器仍按自己的默认档位输出
-    codecContext_->profile = FF_PROFILE_H264_BASELINE;
-    //Level 4.0 对 1080p 只支持到 30 FPS（8160 宏块 × 30 = 244800，上限 245760），
-    //提高帧率必须同步提高 level，否则码流会超出所声明的等级
-    codecContext_->level = 40;
     codecContext_->bit_rate = config_.video.bitrate;
     //还需要设置全局头
     codecContext_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-    //还需要加上参数，降低编码延迟
-    codecContext_->rc_min_rate = config_.video.bitrate;
-    codecContext_->rc_max_rate = config_.video.bitrate;
-    codecContext_->rc_buffer_size = config_.video.bitrate;
-    //设置字典
-    av_opt_set(codecContext_->priv_data,"tune","zerolatency",0);//极速编码
-    av_opt_set(codecContext_->priv_data,"preset","ultrafast",0);//极速编码
+    //子类专属配置，失败即整体失败，由上层决定是否回退到别的编码器
+    if(!ConfigureCodec())
+    {
+        Close();
+        return false;
+    }
 
     //打开编码器
     if(avcodec_open2(codecContext_,codec_,NULL) != 0)
@@ -102,6 +101,18 @@ void VideoEncoder::Close()
     sourceWidth_ = 0;
     sourceHeight_ = 0;
     is_initialzed_ = false;
+    // 每次会话重新计数，D 的测量从新一帧开始
+    pendingFrames_ = 0;
+    lastDelay_ = -1;
+    // 先解 frames 再解 device：frames 上下文持有 device 引用
+    if(hwFramesRef_)
+    {
+        av_buffer_unref(&hwFramesRef_);
+    }
+    if(hwDeviceRef_)
+    {
+        av_buffer_unref(&hwDeviceRef_);
+    }
     if(converter_)
     {
         converter_->Close();
@@ -123,7 +134,7 @@ AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 heig
     if(sourceWidth_ != width || sourceHeight_ != height || !converter_)
     {
         converter_.reset(new VideoConverter());
-        //初始化视频转换器
+        //初始化视频转换器：输出格式取编码器实际要求的 pix_fmt，软编 YUV420P、硬编 NV12
         if(!converter_->Open(width,height,(AVPixelFormat)config_.video.format,
                               codecContext_->width,codecContext_->height,codecContext_->pix_fmt))
         {
@@ -185,6 +196,7 @@ AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 heig
     out_frame->pict_type = AV_PICTURE_TYPE_NONE;
 
     const std::chrono::steady_clock::time_point encodeBegin = std::chrono::steady_clock::now();
+    NoteFrameSent();
     const int sendResult = avcodec_send_frame(codecContext_,out_frame.get());
     if(sendResult < 0)
     {
@@ -205,5 +217,34 @@ AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 heig
     {
         return nullptr;
     }
+    NotePacketReceived(out_frame->pts,h264_packet_.get());
     return h264_packet_;
+}
+
+// 送帧计数 +1。落在 send_frame 之前：无论这一帧最终有没有立刻产出包，它都已经进入编码器。
+void VideoEncoder::NoteFrameSent()
+{
+    ++pendingFrames_;
+}
+
+// 收到包后 -1 并打印当前 D。D = 已送帧数 − 已收包数，稳定下来就是编码器的输出延迟帧数。
+// 只在 D 变化时打印：固定流水线深度会很快静默，若 D 一路增长则说明是无界堆积。
+void VideoEncoder::NotePacketReceived(qint64 inPts,const AVPacket* pkt)
+{
+    if(pendingFrames_ > 0) --pendingFrames_;
+    if(pendingFrames_ == lastDelay_) return;
+    lastDelay_ = pendingFrames_;
+    const qint64 pktPts = pkt ? pkt->pts : 0;
+    const qint64 pktDts = pkt ? pkt->dts : 0;
+    qInfo() << "[LAT-D] encoder delay =" << pendingFrames_
+            << "inPts =" << inPts << "pktPts =" << pktPts << "pktDts =" << pktDts;
+}
+
+// 默认不实现 GPU 路径：只有硬件编码器在 GPU 模式下 override。
+AVPacketPtr VideoEncoder::EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,VideoEncodeTiming* timing)
+{
+    Q_UNUSED(gpu);
+    Q_UNUSED(pts);
+    Q_UNUSED(timing);
+    return nullptr;
 }

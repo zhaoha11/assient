@@ -237,7 +237,7 @@ void GDIScreenCapture::RequestStop()
     frameReady_.notify_all();
 }
 
-bool GDIScreenCapture::WaitLatestFrame(CaptureFrameView& frame)
+bool GDIScreenCapture::WaitLatestFrame(VideoFrame& frame)
 {
     if(frameBuffers_[0].data.empty())
     {
@@ -254,14 +254,17 @@ bool GDIScreenCapture::WaitLatestFrame(CaptureFrameView& frame)
     hasNewFrame_ = false;
     lock.unlock();
 
-    //front 只由本线程写入索引，采集线程不会碰它，锁外读取内容是安全的
+    //front 只由本线程写入索引，采集线程不会碰它，锁外读取内容是安全的。
+    //GDI 始终输出 CPU BGRA，owner 留空、data 指向内部三缓冲的 front，
+    //有效期到下一次 WaitLatestFrame。
     const CaptureFrameBuffer& front = frameBuffers_[frontIndex_];
-    frame.owner.reset();
-    frame.data = front.data.data();
+    frame.kind = VideoFrameKind::Cpu;
+    frame.gpu.reset();
+    frame.cpu.owner.reset();
+    frame.cpu.data = front.data.data();
+    frame.cpu.stride = front.stride;
     frame.width = front.width;
     frame.height = front.height;
-    frame.stride = front.stride;
-    frame.size = front.validBytes;
     frame.sequence = front.sequence;
     frame.capturedAt = front.capturedAt;
     return true;
