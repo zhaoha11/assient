@@ -21,7 +21,7 @@ void VideoPipelineStats::Reset()
 
     started_ = false;
     intervalBegin_ = std::chrono::steady_clock::time_point();
-    lastCapturedSequence_ = 0;
+    lastCapturedFrames_ = 0;
 
     hasEncodedSequence_ = false;
     lastEncodedSequence_ = 0;
@@ -73,7 +73,7 @@ void VideoPipelineStats::OnFrameEncoded(quint64 sequence, quint64 waitUs, quint6
     }
 }
 
-void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, quint64 capturedSequence)
+void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, quint64 capturedFrames)
 {
     if(!kEnabled)
     {
@@ -82,12 +82,12 @@ void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, 
 
     if(!started_)
     {
-        //第一次调用只用来对齐采集端序号，不输出半个周期的不完整数据。
+        //第一次调用只用来对齐采集端帧计数，不输出半个周期的不完整数据。
         //本帧的编码记录发生在 intervalBegin_ 之前，必须一并清掉，
         //否则第一个窗口会多算一帧编码、少算一帧采集。
         started_ = true;
         intervalBegin_ = now;
-        lastCapturedSequence_ = capturedSequence;
+        lastCapturedFrames_ = capturedFrames;
         ResetInterval();
         return;
     }
@@ -98,17 +98,18 @@ void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, 
         return;
     }
 
-    const quint64 capturedFrames = capturedSequence > lastCapturedSequence_
-                                   ? capturedSequence - lastCapturedSequence_ : 0;
+    //采集帧数取真实帧计数差，与时间格序号无关（后者在 60Hz 目标下恒等于 elapsed×60）
+    const quint64 framesThisWindow = capturedFrames > lastCapturedFrames_
+                                     ? capturedFrames - lastCapturedFrames_ : 0;
 
     //本窗口编码后的 H.264 码流码率：字节 ×8 转比特，再按窗口实际时长折算 kbps
     const double bitrateKbps = encodedBytes_ * 8.0 * kMicrosecondsPerSecond / elapsedUs / 1000.0;
 
     qInfo() << QString("[PIPE-STATS] 采集帧率 = %1 编码帧率 = %2 采集帧数 = %3 编码帧数 = %4 重复 = %5 跳帧 = %6"
                        " 等待均值us = %7 等待峰值us = %8 转换均值us = %9 编码均值us = %10 码率kbps = %11 序号 = %12")
-                   .arg(capturedFrames * kMicrosecondsPerSecond / elapsedUs, 0, 'f', 1)
+                   .arg(framesThisWindow * kMicrosecondsPerSecond / elapsedUs, 0, 'f', 1)
                    .arg(encodedFrames_ * kMicrosecondsPerSecond / elapsedUs, 0, 'f', 1)
-                   .arg(capturedFrames)
+                   .arg(framesThisWindow)
                    .arg(encodedFrames_)
                    .arg(duplicateFrames_)
                    .arg(skippedFrames_)
@@ -120,6 +121,6 @@ void VideoPipelineStats::ReportIfDue(std::chrono::steady_clock::time_point now, 
                    .arg(lastEncodedSequence_);
 
     intervalBegin_ = now;
-    lastCapturedSequence_ = capturedSequence;
+    lastCapturedFrames_ = capturedFrames;
     ResetInterval();
 }

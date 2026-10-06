@@ -306,8 +306,9 @@ void RtmpPushManager::EncodeVideo()
             break;
         }
 
-        //PTS 取采集序号差而非「已编码帧计数」：编码落后跳过采集帧时序号照样跳跃，
-        //时间戳才对应画面真实发生的时刻。编码器时间基是 1/帧率，序号差即帧间隔。
+        //PTS 取采集时间格序号差而非「已编码帧计数」：序号由采集端的单调时钟量化而来，
+        //编码落后跳过采集帧时序号照样跳跃，时间戳才对应画面真实发生的时刻。
+        //编码器时间基是 1/帧率，时间格序号差即帧间隔，且与采集速率无关。
         if(!hasFirstSequence)
         {
             firstSequence = frame.sequence;
@@ -344,13 +345,13 @@ void RtmpPushManager::EncodeVideo()
             break;
         }
 
-        //每秒汇总一次，采集帧数直接从采集端序号取，避免编码线程漏采帧被忽略
-        stats_.ReportIfDue(std::chrono::steady_clock::now(),capture->GetCaptureSequence());
+        //每秒汇总一次，采集帧数取采集端真实帧计数，避免编码线程漏采帧被忽略
+        stats_.ReportIfDue(std::chrono::steady_clock::now(),capture->GetCapturedFrames());
     }
     //退出时补一行日志，把「停滞」和「死锁」区分开。
     //括号不能省：<< 优先级高于 ?:，否则整行会被当成条件表达式
     qInfo() << "[PIPE-STATS] encode thread exit, captured ="
-            << (capture ? capture->GetCaptureSequence() : 0);
+            << (capture ? capture->GetCapturedFrames() : 0);
 }
 
 void RtmpPushManager::EncodeAudio()

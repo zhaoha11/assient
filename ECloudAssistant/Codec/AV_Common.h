@@ -2,6 +2,7 @@
 #define AV_COMMOEN_H
 #include <QtGlobal>
 #include <QDebug>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include "AV_Queue.h"
@@ -21,6 +22,18 @@ constexpr AVPixelFormat kCapturePixelFormat = AV_PIX_FMT_BGRA;
 //采集与编码统一的目标帧率。采集端的 gdigrab framerate、编码器的 time_base
 //以及约 1 秒的 GOP 都由它派生，避免出现多套帧率口径。
 constexpr qint32 kTargetFramerate = 60;
+
+//采集时间轴统一口径：以本会话起点为零点，把采集完成时刻量化到 1/目标帧率 的时间格。
+//GDI 与 WGC 都用它生成 VideoFrame::sequence，使序号真正落在单调时钟上。之前 GDI 用
+//序号自增，隐含假设「采集速率 == 目标帧率」；采集跟不上时（GDI 在 60Hz 目标下只有 ~45fps）
+//时间轴每真实一秒只走 0.75 秒，与真实时间对不上。PTS 由序号差派生，这里就是时间轴的根。
+//四舍五入到最近格；两帧过近仍可能落进同一格，调用方须再用 max(seq, 上次+1) 兜底。
+inline quint64 MakeSequence(std::chrono::steady_clock::time_point now,
+                            std::chrono::steady_clock::time_point start)
+{
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
+    return static_cast<quint64>((us * kTargetFramerate + 500000) / 1000000);
+}
 
 typedef struct VIDEOCONFIG
 {

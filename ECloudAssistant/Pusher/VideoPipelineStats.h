@@ -17,13 +17,13 @@ public:
     // 重新开始一次统计周期，首次建立推流和再次建立推流时各调用一次。
     void Reset();
 
-    // 记录一帧编码完成。sequence 来自采集端，用于识别重复编码和跳帧；
+    // 记录一帧编码完成。sequence 是采集端的时钟量化时间格序号（用于识别跳帧，单位是时间格）；
     // frameBytes 是本帧编码后的码流字节数（可能为 0，表示编码器还在缓冲），用于统计码率。
     void OnFrameEncoded(quint64 sequence,quint64 waitUs,quint64 convertUs,quint64 encodeUs,quint64 frameBytes);
 
     // 距上次汇总满一秒时输出一行并开始下一周期。
-    // capturedSequence 是采集端当前产出的帧序号，用来计算本周期实际采集帧数。
-    void ReportIfDue(std::chrono::steady_clock::time_point now,quint64 capturedSequence);
+    // capturedFrames 是采集端当前产出的真实帧总数，用来计算本周期实际采集帧数。
+    void ReportIfDue(std::chrono::steady_clock::time_point now,quint64 capturedFrames);
 private:
     //只清本周期累加量，不动 started_ 和序号比较状态
     void ResetInterval();
@@ -33,7 +33,7 @@ private:
 
     bool started_;
     std::chrono::steady_clock::time_point intervalBegin_;
-    quint64 lastCapturedSequence_;
+    quint64 lastCapturedFrames_;
 
     quint64 encodedFrames_;
     quint64 duplicateFrames_;

@@ -1413,3 +1413,14 @@ Behavior: WGC GPU textures use the shared D3D11 device and D3D11 VideoProcessor 
 Verification: the project WGC experiment record documents a 1920x1080 local A/B run: WGC+NVENC end-to-end 50-70 ms and GDI+x264 44-67 ms (59.33 ms mean), with zero GPU-to-CPU readback on the WGC hardware route. Earlier in this work session, GPU NVENC and CPU x264 publish/decode probes each completed three start/stop cycles. No new build or test was run for this upload request. Runtime failure recovery on a live two-client session remains to be confirmed.
 
 Commit ID: this entry's containing commit (resolve with `git log -1 --format=%H -- context/WORKLOG.md`).
+
+
+## 采集时间轴统一到单调时钟（GDI/WGC 共用 MakeSequence）
+
+Date: 2026-10-06. Goal: 让 GDI 与 WGC 用同一套时间轴口径生成 `VideoFrame::sequence`。此前 GDI 用 `++capture_sequence_` 自增，隐含「采集速率 == 目标帧率」；在 60Hz 目标下 GDI 实际只有约 45fps，编码器的 `time_base` 却是 1/60，于是每真实一秒媒体时间线只走 0.75 秒，与真实时间对不上。WGC 早已按时钟量化，本次把该做法抽成公共函数供两端共用。
+
+Affected files: `ECloudAssistant/Codec/AV_Common.h`, `ECloudAssistant/Pusher/capture/ScreenCapture.h`, `ECloudAssistant/Pusher/capture/GDISreenScapture.{h,cpp}`, `ECloudAssistant/Pusher/capture/WGCScreenCapture.{h,cpp}`, `ECloudAssistant/Pusher/RtmpPushManager.cpp`, `ECloudAssistant/Pusher/VideoPipelineStats.{h,cpp}`, and this worklog.
+
+Behavior: `AV_Common.h` 新增 `inline quint64 MakeSequence(now, start)`，把采集完成时刻相对会话起点量化到 `1/kTargetFramerate` 的时间格（四舍五入到最近格）。GDI 与 WGC 各自维护一个会话起点与上一次的序号，用 `sequence = max(MakeSequence(...), 上次序号 + 1)` 保证严格单调，两帧过近落进同一格时也不会重叠或倒退。`sequence` 从此只表示时间轴位置，由 `EncodeVideo` 用 `frame.sequence - firstSequence` 派生 PTS，行为不变。由于 `sequence` 不再是「真实帧数」，统计所需的真实帧计数单独拆出：`ScreenCapture::GetCaptureSequence()` 改名为 `GetCapturedFrames()`，语义变为「已产出的真实采集帧总数」——GDI 每解码出一帧 +1，WGC 只在 `Read` 真取到新帧时 +1（复用上一帧重复发布不计数），`VideoPipelineStats` 的 `采集帧数/采集帧率` 改用它。`重复`（同序号被再次编码）与 `跳帧`（序号差）仍走 `sequence`，`跳帧` 的单位现在明确是时间格。
+
+Verification: Qt 6.10.1 MSVC2022 Debug 在 `ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug` 重新 `qmake` 生成 Makefile 后 `jom /f Makefile.Debug -j4` 编译链接通过，exit 0，无 error（仅既有 warning）；确认 `GDISreenScapture.obj`、`WGCScreenCapture.obj`、`RtmpPushManager.obj`、`VideoPipelineStats.obj` 均重新编译、`debug/ECloudAssistant.exe` 重新链接，再次增量构建报无工作、exit 0。未验证：GDI 在 60Hz 目标下时间轴是否真与真实时间对齐、以及 WGC 复用上一帧时 `采集帧数 < 编码帧数` 的统计读数——均需 SRS + 双端实机运行观察 `[PIPE-STATS]`。Commit ID: none. Rollback: 删除 `MakeSequence` 与 `sessionStart_/lastSequence_`，把 `capturedFrames_` 恢复为自增序号并改回 `GetCaptureSequence()` 即可。

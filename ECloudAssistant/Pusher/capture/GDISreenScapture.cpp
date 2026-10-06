@@ -24,7 +24,8 @@ GDIScreenCapture::GDIScreenCapture()
     , is_initialzed_(false)
     , width_(0)
     , height_(0)
-    , capture_sequence_(0)
+    , capturedFrames_(0)
+    , lastSequence_(0)
     , video_index_(-1)
     , framerate_(kTargetFramerate)
     , format_logged_(false)
@@ -60,9 +61,9 @@ quint32 GDIScreenCapture::GetHeight() const
     return height_;
 }
 
-quint64 GDIScreenCapture::GetCaptureSequence() const
+quint64 GDIScreenCapture::GetCapturedFrames() const
 {
-    return capture_sequence_.load();
+    return capturedFrames_.load();
 }
 
 bool GDIScreenCapture::Init(qint64 display_index)
@@ -196,6 +197,11 @@ bool GDIScreenCapture::Init(qint64 display_index)
         hasNewFrame_ = false;
         stopped_ = false;//再次建立推流必须能重新握手
     }
+
+    //每次会话重置时间轴与真实帧计数：序号重新以本会话起点为零点量化
+    capturedFrames_.store(0);
+    lastSequence_ = 0;
+    sessionStart_ = std::chrono::steady_clock::now();
 
     video_index_ = videoIndex;
     stop_ = false;
@@ -372,8 +378,18 @@ bool GDIScreenCapture::Decode(AVFrame* av_frame, AVPacket* av_packet)
                     av_frame->data[0] + y * av_frame->linesize[0],
                     writeBuffer.stride);
     }
-    writeBuffer.sequence = ++capture_sequence_;
-    writeBuffer.capturedAt = std::chrono::steady_clock::now();
+    //序号由真实单调时钟量化而来，不再是简单自增：采集速率低于目标帧率时时间轴照样走真实时间。
+    //两帧过近被量化到同一格时强制递增，保证严格单调，PTS 才不会倒退或重叠。
+    const std::chrono::steady_clock::time_point capturedAt = std::chrono::steady_clock::now();
+    quint64 sequence = MakeSequence(capturedAt,sessionStart_);
+    if(sequence <= lastSequence_)
+    {
+        sequence = lastSequence_ + 1;
+    }
+    lastSequence_ = sequence;
+    writeBuffer.sequence = sequence;
+    writeBuffer.capturedAt = capturedAt;
+    ++capturedFrames_;
     av_frame_unref(av_frame);
 
     {

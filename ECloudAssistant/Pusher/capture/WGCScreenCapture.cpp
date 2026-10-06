@@ -348,7 +348,7 @@ bool WGCScreenCapture::Init(qint64 display_index)
     Q_UNUSED(display_index); // 与 GDI 一样，当前只采集主显示器。
     if(worker_.joinable()) return initOk_;
     stop_.store(false);
-    captureSequence_.store(0);
+    capturedFrames_.store(0);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopped_ = false;
@@ -408,7 +408,7 @@ bool WGCScreenCapture::WaitLatestFrame(VideoFrame& frame)
     return true;
 }
 
-// 覆盖单槽位中的旧帧，更新序号和时间戳，然后通知一个取帧线程。
+// 覆盖单槽位中的旧帧，更新时间戳后通知一个取帧线程。序号由 Run 按时间格算好传入。
 void WGCScreenCapture::Publish(const VideoFrame& frame, quint64 sequence)
 {
     {
@@ -419,7 +419,6 @@ void WGCScreenCapture::Publish(const VideoFrame& frame, quint64 sequence)
         latestFrame_.capturedAt = std::chrono::steady_clock::now();
         width_.store(frame.width);
         height_.store(frame.height);
-        captureSequence_.store(sequence);
         hasNewFrame_ = true;
     }
     frameReady_.notify_one();
@@ -460,8 +459,9 @@ void WGCScreenCapture::Run()
     using Clock = std::chrono::steady_clock;
     const auto interval = std::chrono::nanoseconds(1000000000 / kTargetFramerate);
     auto nextTick = Clock::now();
-    Clock::time_point firstPublished;
-    bool hasPublished = false;
+    //时间轴起点与 nextTick 同源，Publish 的序号即相对它量化到 1/目标帧率 的时间格
+    const Clock::time_point sessionStart = Clock::now();
+    quint64 lastSequence = 0;
     VideoFrame lastFrame;
     auto nextMonitorCheck = Clock::now() + std::chrono::seconds(1);
     while(!stop_.load())
@@ -501,21 +501,24 @@ void WGCScreenCapture::Run()
             lastFrame = VideoFrame{};
             continue;
         }
+        //只有真取到新帧才计入采集帧数；下面复用上一帧重复发布不算
+        if(result == ReadResult::frame)
+        {
+            ++capturedFrames_;
+        }
         // 帧池暂时无新帧时沿用上一帧，按目标帧率继续发布递增序号。
         const bool hasFrame = (lastFrame.kind == VideoFrameKind::Gpu) ? static_cast<bool>(lastFrame.gpu)
                                                                      : static_cast<bool>(lastFrame.cpu.owner);
         if(hasFrame)
         {
             const auto publishAt = Clock::now();
-            if(!hasPublished)
+            //序号由单调时钟量化而来，两帧过近落进同一格时强制递增，保证严格单调
+            quint64 sequence = MakeSequence(publishAt,sessionStart);
+            if(sequence <= lastSequence)
             {
-                firstPublished = publishAt;
-                hasPublished = true;
+                sequence = lastSequence + 1;
             }
-            const quint64 clockSequence = static_cast<quint64>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(publishAt - firstPublished).count()
-                / interval.count()) + 1;
-            const quint64 sequence = (std::max)(captureSequence_.load() + 1,clockSequence);
+            lastSequence = sequence;
             Publish(lastFrame,sequence);
         }
         nextTick += interval;

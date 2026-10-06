@@ -21,7 +21,9 @@ public:
     virtual bool Close() = 0;
     virtual quint32 GetWidth() const = 0;
     virtual quint32 GetHeight() const = 0;
-    virtual quint64 GetCaptureSequence() const = 0;
+    // 已产出的真实采集帧总数，供低频统计计采集帧率；
+    // 与 VideoFrame::sequence 无关：后者是时钟量化后的时间格序号，用于派生 PTS。
+    virtual quint64 GetCapturedFrames() const = 0;
 
     // 输出形态能力：不支持的实现直接沿用默认值（GDI 即如此）。
     virtual bool SupportsGpuOutput() const { return false; }

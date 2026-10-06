@@ -33,8 +33,9 @@ public:
     void RequestStop() override;
     // 停止采集线程并释放三块缓冲区。不能在消费者仍持有上一帧 VideoFrame 时调用。
     bool Close() override;
-    // 已产出的采集帧总数，与 VideoFrame::sequence 同源，供低频统计读取。
-    quint64 GetCaptureSequence() const override;
+    // 已产出的真实采集帧总数，供低频统计计采集帧率。
+    // 与 VideoFrame::sequence 无关：后者是时钟量化后的时间格序号。
+    quint64 GetCapturedFrames() const override;
 protected:
     virtual void run() override;
 private:
@@ -58,7 +59,10 @@ private:
     std::atomic<bool> is_initialzed_;
     quint32 width_;
     quint32 height_;
-    std::atomic<quint64> capture_sequence_;
+    std::atomic<quint64> capturedFrames_;
+    //时间轴：会话起点 + 上一次发布的时间格序号，仅在采集线程内读写
+    std::chrono::steady_clock::time_point sessionStart_;
+    quint64 lastSequence_;
     qint64  video_index_;
     qint64  framerate_;
     bool    format_logged_;
