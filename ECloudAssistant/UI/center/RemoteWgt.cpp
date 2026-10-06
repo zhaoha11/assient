@@ -26,6 +26,7 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     captureBackendCombo_->setObjectName("captureBackendCombo");
     captureBackendCombo_->addItem(QString::fromUtf8("采集方式：GDI"));
     captureBackendCombo_->addItem(QString::fromUtf8("采集方式：WGC"));
+    captureBackendCombo_->addItem(QString::fromUtf8("采集方式：摄像头"));
 
     selfCodeEdit_->setPlaceholderText(QString("本机识别码"));
     rmoteCodeEdit_->setPlaceholderText(QString("远程识别码"));
@@ -48,6 +49,13 @@ RemoteWgt::RemoteWgt(QWidget *parent)
     StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
 
     connect(captureBackendCombo_,&QComboBox::currentIndexChanged,this,[this](int index){
+        // index 2 为摄像头，与屏幕后端互斥；0/1 仍映射到 GDI/WGC
+        if(index == 2)
+        {
+            manager_->SetVideoSourceKind(RtmpPushManager::VideoSourceKind::Camera);
+            return;
+        }
+        manager_->SetVideoSourceKind(RtmpPushManager::VideoSourceKind::Screen);
         manager_->SetCaptureBackend(index == 1 ? RtmpPushManager::CaptureBackend::WGC
                                                : RtmpPushManager::CaptureBackend::GDI);
     });

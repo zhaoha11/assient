@@ -1,7 +1,9 @@
 #include "RtmpPushManager.h"
 #include "GDISreenScapture.h"
 #include "WGCScreenCapture.h"
+#include "CameraCapture.h"
 #include "ScreenCapture.h"
+#include "VideoSource.h"
 #include "D3D11SharedContext.h"
 #include <chrono>
 #include "AAC_Encoder.h"
@@ -83,8 +85,26 @@ bool RtmpPushManager::Init()
     //   A：WGC GPU 纹理 + NVENC（GPU 内转 NV12，不读回 CPU）
     //   B：WGC CPU 读回 + 软编
     //   C：GDI + 软编
+    //   D：摄像头 dshow + CPU BGRA + 软编
     // 同一时刻只跑一条完整路径，避免出现「GPU 输出 + 软编」这类无法编码的错配。
     // 任一档失败都要整体拆除再试下一档，不能留下半条路径的资源。
+
+    // 摄像头与屏幕是会话级二选一：选了摄像头就不再尝试 WGC/GDI，失败也不静默改推屏幕
+    if(videoSourceKind_.load() == VideoSourceKind::Camera)
+    {
+        if(SetupCameraPipeline())
+        {
+            activeVideoSourceKind_ = VideoSourceKind::Camera;
+            activePath_ = "D(Camera + software)";
+            qInfo() << "[PUSH] active video source = Camera";
+            return true;
+        }
+        qWarning() << "[PUSH] camera pipeline failed";
+        TeardownPipeline();
+        return false;
+    }
+    activeVideoSourceKind_ = VideoSourceKind::Screen;
+
     const CaptureBackend requestedBackend = captureBackend_.load();
 
     if(requestedBackend == CaptureBackend::WGC)
@@ -133,27 +153,28 @@ bool RtmpPushManager::Init()
     return false;
 }
 
-// 端到端建立一条完整路径：采集 → 视频编码 → 音频采集/编码 → 编码参数。
+// 端到端建立一条屏幕采集路径：屏幕采集 → 视频编码 → 音频采集/编码 → 编码参数。
 // 任一步失败都在返回前完整回滚，保证不会把半条路径留给下一次尝试。
 bool RtmpPushManager::SetupPipeline(CaptureBackend backend,ScreenCapture::CaptureOutput output,
                                     D3D11SharedContext* shared,VideoEncoderKind encoderKind)
 {
     //准备“原始画面来源”
+    std::unique_ptr<ScreenCapture> screen;
     if(backend == CaptureBackend::WGC)
     {
-        screen_Capture_.reset(new WGCScreenCapture());
+        screen.reset(new WGCScreenCapture());
     }
     else
     {
-        screen_Capture_.reset(new GDIScreenCapture());
+        screen.reset(new GDIScreenCapture());
     }
     // 输出形态与共享 device 都必须在 Init() 之前设置：采集线程建立会话时读取
-    screen_Capture_->SetOutput(output);
+    screen->SetOutput(output);
     if(shared)
     {
-        screen_Capture_->SetExternalDevice(shared);
+        screen->SetExternalDevice(shared);
     }
-    if(!screen_Capture_->Init())
+    if(!screen->Init())
     {
         qWarning() << "[PUSH] screen capture init failed, backend ="
                    << (backend == CaptureBackend::WGC ? "WGC" : "GDI");
@@ -161,9 +182,35 @@ bool RtmpPushManager::SetupPipeline(CaptureBackend backend,ScreenCapture::Captur
         return false;
     }
 
+    const quint32 captureWidth = screen->GetWidth();
+    const quint32 captureHeight = screen->GetHeight();
+    // 上转型为 VideoSource：编码线程只通过公共契约消费，不再区分采集后端
+    videoSource_ = std::move(screen);
+    return SetupEncoderAndAudio(captureWidth,captureHeight,shared,encoderKind);
+}
+
+// 摄像头采集路径：dshow 打开默认摄像头，固定 CPU BGRA + 软件编码，打开失败不回退屏幕。
+bool RtmpPushManager::SetupCameraPipeline()
+{
+    std::unique_ptr<CameraCapture> camera(new CameraCapture());
+    if(!camera->Init())
+    {
+        qWarning() << "[PUSH] camera capture init failed";
+        TeardownPipeline();
+        return false;
+    }
+    const quint32 captureWidth = camera->GetWidth();
+    const quint32 captureHeight = camera->GetHeight();
+    videoSource_ = std::move(camera);
+    return SetupEncoderAndAudio(captureWidth,captureHeight,nullptr,VideoEncoderKind::Software);
+}
+
+// 视频源就绪后的公共尾部：视频编码 → 音频采集/编码 → 编码参数。
+// 屏幕与摄像头两条装配路径共用，任一步失败都在返回前完整回滚。
+bool RtmpPushManager::SetupEncoderAndAudio(quint32 captureWidth,quint32 captureHeight,
+                                           D3D11SharedContext* shared,VideoEncoderKind encoderKind)
+{
     //视频编码
-    const quint32 captureWidth = screen_Capture_->GetWidth();
-    const quint32 captureHeight = screen_Capture_->GetHeight();
     const qint32 encodeWidth = static_cast<qint32>(captureWidth & ~1U);
     const qint32 encodeHeight = static_cast<qint32>(captureHeight & ~1U);
     if(encodeWidth <= 0 || encodeHeight <= 0)
@@ -256,9 +303,9 @@ void RtmpPushManager::Close()
 
     //必须在 join 编码线程之前唤醒阻塞在条件变量上的它，否则这里会永久等待。
     //此处不 join、不释放缓冲池，所以调用 Close() 的线程不会和采集线程相互等待。
-    if(screen_Capture_)
+    if(videoSource_)
     {
-        screen_Capture_->RequestStop();
+        videoSource_->RequestStop();
     }
 
     StopEncoder();
@@ -281,8 +328,8 @@ void RtmpPushManager::Close()
 void RtmpPushManager::EncodeVideo()
 {
     stats_.Reset();
-    //线程运行期间 screen_Capture_ 不会被 reset，取一次裸指针避免每轮判空
-    ScreenCapture* capture = screen_Capture_.get();
+    //线程运行期间 videoSource_ 不会被 reset，取一次裸指针避免每轮判空
+    VideoSource* capture = videoSource_.get();
     VideoFrame frame;
     std::vector<quint8> out_frame;
     //编码 PTS 以本次编码线程的首帧为原点，重新推流时自然从 0 重新对齐
@@ -315,8 +362,10 @@ void RtmpPushManager::EncodeVideo()
         {
             firstSequence = frame.sequence;
             hasFirstSequence = true;
-            qInfo() << "[CAPTURE] session first frame, backend ="
-                    << (activeCaptureBackend_ == CaptureBackend::WGC ? "WGC" : "GDI")
+            qInfo() << "[CAPTURE] session first frame, source ="
+                    << (activeVideoSourceKind_ == VideoSourceKind::Camera
+                        ? "Camera"
+                        : (activeCaptureBackend_ == CaptureBackend::WGC ? "WGC" : "GDI"))
                     << "size =" << frame.width << "x" << frame.height;
         }
         const qint64 framePts = static_cast<qint64>(frame.sequence - firstSequence);
@@ -425,10 +474,10 @@ void RtmpPushManager::StopCapture()
         audio_Capture_.reset();
     }
 
-    if(screen_Capture_)
+    if(videoSource_)
     {
-        screen_Capture_->Close();
-        screen_Capture_.reset();
+        videoSource_->Close();
+        videoSource_.reset();
     }
 }
 

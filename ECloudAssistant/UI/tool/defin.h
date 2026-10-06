@@ -301,7 +301,7 @@ struct ObtainStream_body : public packet_head
         return std::string(id.data());
     }
     std::array<char,10> id;
-    uint8_t captureBackend = 0; // 0 = GDI, 1 = WGC
+    uint8_t captureBackend = 0; // 0 = GDI, 1 = WGC, 2 = 摄像头
 };
 //获取流应答
 struct ObtainStreamReply_body : public packet_head
@@ -326,7 +326,7 @@ struct CreateStream_body : public packet_head
         cmd = CREATESTREAM;
         len = sizeof(CreateStream_body);
     }
-    uint8_t captureBackend = 0; // 0 = GDI, 1 = WGC
+    uint8_t captureBackend = 0; // 0 = GDI, 1 = WGC, 2 = 摄像头
 };
 //创建流应答 流地址和结果
 struct CreateStreamReply_body : public packet_head

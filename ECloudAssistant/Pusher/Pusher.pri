@@ -9,8 +9,10 @@ HEADERS += \
     $$PWD/VideoPipelineStats.h \
     $$PWD/capture/AudioBuffer.h \
     $$PWD/capture/AudioCapture.h \
+    $$PWD/capture/CameraCapture.h \
     $$PWD/capture/GDISreenScapture.h \
     $$PWD/capture/ScreenCapture.h \
+    $$PWD/capture/VideoSource.h \
     $$PWD/capture/WGCScreenCapture.h \
     $$PWD/capture/WASAPICapture.h \
     $$PWD/rtmp/RtmpChunk.h \
@@ -26,6 +28,7 @@ SOURCES += \
     $$PWD/RtmpPushManager.cpp \
     $$PWD/VideoPipelineStats.cpp \
     $$PWD/capture/AudioCapture.cpp \
+    $$PWD/capture/CameraCapture.cpp \
     $$PWD/capture/GDISreenScapture.cpp \
     $$PWD/capture/WGCScreenCapture.cpp \
     $$PWD/capture/WASAPICapture.cpp \

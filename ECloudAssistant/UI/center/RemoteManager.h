@@ -29,6 +29,8 @@ protected:
     void HandleVideoPathFailed();
 private:
     void Close();
+    // 当前活跃视频源的对外编号：0=GDI、1=WGC、2=摄像头，与下拉框索引一致
+    int ActiveBackendValue() const;
 private:
     std::unique_ptr<PullerWgt> pullerWgt_;
     std::unique_ptr<EventLoop> event_loop_;

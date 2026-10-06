@@ -37,7 +37,7 @@ public:
     inline void SetJoinResultCallBack(const JoinResultCallBack& cb){joinResultCb_=cb;}
     inline void SetStartStreamCallBack(const StartStreamCallBack& cb){startStreamCb_ = cb;}
     inline void SetStopStreamCallBack(const StopStreamCallBack& cb){stopStreamCb_ = cb;}
-    void SetCaptureBackend(uint8_t backend) { captureBackend_ = backend == 1 ? 1 : 0; }
+    void SetCaptureBackend(uint8_t backend) { captureBackend_ = backend <= 2 ? backend : 0; }
 protected:
     bool OnRead(BufferReader& buffer);
     void OnClose();

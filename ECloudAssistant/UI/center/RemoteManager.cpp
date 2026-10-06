@@ -54,9 +54,11 @@ void RemoteManager::StartRemote(const QString &sigIp, uint16_t port, const QStri
     //开始远程
     pullerWgt_.reset(new PullerWgt(event_loop_.get(),nullptr));
     pullerWgt_->show();
+    //把本机下拉框的采集方式作为请求发给信令：0=GDI、1=WGC、2=摄像头，由被控端按信令决定视频源
+    const uint8_t requestedBackend = GetVideoSourceKind() == VideoSourceKind::Camera
+                                         ? 2 : (GetCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
     //创建一个拉流器开始连接
-    if(!pullerWgt_->Connect(sigIp,port,code,
-            GetCaptureBackend() == CaptureBackend::WGC ? 1 : 0))
+    if(!pullerWgt_->Connect(sigIp,port,code,requestedBackend))
     {
         qDebug() << "远程连接失败";
         return;
@@ -75,14 +77,39 @@ bool RemoteManager::HandleStartStream(const QString &streamAddr, uint8_t capture
 {
     //开始推流
     lastStreamAddr_ = streamAddr;
-    SetCaptureBackend(captureBackend == 1 ? CaptureBackend::WGC : CaptureBackend::GDI);
+    // 信令优先：控制端下发的采集方式决定本会话视频源，覆盖被控端本地下拉的默认值。
+    // 0=GDI、1=WGC、2=摄像头；须在 Open 之前设定，Init 会读取 videoSourceKind_。
+    switch(captureBackend)
+    {
+    case 2:
+        SetVideoSourceKind(VideoSourceKind::Camera);
+        break;
+    case 1:
+        SetVideoSourceKind(VideoSourceKind::Screen);
+        SetCaptureBackend(CaptureBackend::WGC);
+        break;
+    default:
+        SetVideoSourceKind(VideoSourceKind::Screen);
+        SetCaptureBackend(CaptureBackend::GDI);
+        break;
+    }
     const bool opened = this->Open(streamAddr);
     if(opened)
     {
         SetCaptureBackend(GetActiveCaptureBackend());
-        emit captureBackendStarted(GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
+        emit captureBackendStarted(ActiveBackendValue());
     }
     return opened;
+}
+
+// 当前活跃视频源的对外编号，与 RemoteWgt 下拉框索引对齐（0=GDI、1=WGC、2=摄像头）
+int RemoteManager::ActiveBackendValue() const
+{
+    if(GetActiveVideoSourceKind() == VideoSourceKind::Camera)
+    {
+        return 2;
+    }
+    return GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0;
 }
 
 // 会话级退化：不在某一帧上换编码器，而是停掉当前推流、以软编路径整条重建。只降一级。
@@ -90,6 +117,12 @@ void RemoteManager::HandleVideoPathFailed()
 {
     if(lastStreamAddr_.isEmpty())
     {
+        return;
+    }
+    // 摄像头路径本身就是软编：设备或编码失败重建同一个摄像头没有意义，避免空转
+    if(GetActiveVideoSourceKind() == VideoSourceKind::Camera)
+    {
+        qWarning() << "[PUSH] camera video path failed, not rebuilding";
         return;
     }
     qWarning() << "[PUSH] video path failed at runtime, rebuilding session with software encoder";
@@ -102,7 +135,7 @@ void RemoteManager::HandleVideoPathFailed()
     if(opened)
     {
         SetCaptureBackend(GetActiveCaptureBackend());
-        emit captureBackendStarted(GetActiveCaptureBackend() == CaptureBackend::WGC ? 1 : 0);
+        emit captureBackendStarted(ActiveBackendValue());
     }
     else
     {

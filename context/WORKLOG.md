@@ -1516,3 +1516,35 @@ Date: 2026-10-06. Goal: 将本轮采集／编码优化、现有 WGC 诊断指标
 Verification: 提交前对当前工作区重新运行 Qt 6.10.1 MSVC2022 Debug qmake＋jom，`BUILD_EXIT=0`；编码／线程回收回归再次通过，`TEST_EXIT=0`，EventLoop 20 次创建销毁线程数 4→4，带填充行与紧凑行解码像素差异为 0。暂存内容检查通过后提交；远端是否同步以本次终端 push／ls-remote 结果为准。此前 WGC GPU／CPU 各三次启停证据沿用上一节，本次没有重新测量双端 RTMP 或端到端性能。
 
 Commit ID: 本节所属提交（提交完成后用 `git log -1 --format=%H -- context/WORKLOG.md` 获取，避免把自引用哈希写入提交内容）。Remaining limitation: 双端 RTMP、长时间稳定性与异常 GPU 退化仍未重新验收。Rollback: 对本次提交使用常规 revert，保留现有其他工作区改动。
+
+## 摄像头采集第一阶段方案文档
+
+Date: 2026-10-06. Goal: 精简用户提出的摄像头方案，形成可实施、可验收的任务说明。Affected files: 新增 `context/摄像头采集.md`，以及本日志。Behavior: 仅增加设计文档，未实现摄像头、未修改代码／协议。方案确定 FFmpeg dshow、CPU BGRA＋libx264、屏幕／摄像头会话级二选一；建议最小 VideoSource 公共契约，屏幕 GPU 配置保留在 ScreenCapture。核对当前 CpuFrameView 为单指针／stride，当前编码时间基与 MakeSequence 共用 60Hz；补充默认设备定义、帧缓冲生命周期、阻塞读取退出、失败回滚、尺寸变化及双端验收要求。Verification: 已对照 ScreenCapture.h、VideoFrame.h、RtmpPushManager.{h,cpp}、AV_Common.h 和 FFmpeg dshow 官方文档；UTF-8 文档及差异检查通过，不需要编译。Commit ID: none。Remaining limitation: 摄像头设备能力、读取退出行为与 RTMP 闭环均待实现和实机验收；UI／信令选择入口作为后续接入。Rollback: 删除新增方案文档及本节，保留既有工作区改动。
+
+## 摄像头采集第一阶段实现
+
+Date: 2026-10-06. Goal: 按 `context/摄像头采集.md` 实现第一阶段摄像头采集，使被控端可在会话级选择「屏幕」或「摄像头」，复用现有编码／推流／播放链路。Affected files: 新增 `ECloudAssistant/Pusher/capture/VideoSource.h`、`ECloudAssistant/Pusher/capture/CameraCapture.{h,cpp}`；修改 `Pusher/capture/ScreenCapture.h`（改为继承 VideoSource）、`Pusher/RtmpPushManager.{h,cpp}`、`Pusher/Pusher.pri`、`UI/center/RemoteManager.{h,cpp}`、`UI/center/RemoteWgt.cpp`，以及本日志。一次性验证探针 `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/probe/camera_probe.cpp` 不入产品源码。
+
+Behavior: 抽出公共契约 `VideoSource`（WaitLatestFrame／RequestStop／Close／宽高／源帧·发布帧计数／虚析构），`ScreenCapture` 改为 `: public VideoSource` 且只保留屏幕专属的 `Init(display_index)`／`CaptureOutput`／`SetOutput`／`SetExternalDevice`；新增 `CameraCapture : public VideoSource`，用 FFmpeg dshow 打开首个视频设备，解码后统一 swscale 转 BGRA，按 GDI 式三缓冲发布 `VideoFrame`（owner 留空、data 指向 front），序号复用 `MakeSequence` 并强制递增。`RtmpPushManager` 增加 `VideoSourceKind{Screen,Camera}` 与 `videoSource_`（取代原 `screen_Capture_`），把 SetupPipeline 尾部抽为 `SetupEncoderAndAudio`，新增 `SetupCameraPipeline`；摄像头打开失败明确返回失败、不静默改推屏幕。摄像头设备的打开、读取、释放全部在同一工作线程内完成——FFmpeg dshow 在 read_header 里 `CoInitialize(0)`、在 read_close 里 `CoUninitialize`，跨线程调用会破坏 COM 套间约定。被控端 `RemoteWgt` 下拉新增「采集方式：摄像头」，`captureBackendStarted` 扩为可携带 2，`RemoteManager` 在摄像头时忽略信令下发的屏幕后端且不触发软编重建。
+
+Verification: （1）构建：Qt 6.10.1 MSVC2022 x64 Debug 下重跑 `qmake -spec win32-msvc CONFIG+=debug CONFIG+=qml_debug`（须重跑 qmake 以纳入新文件）＋ `jom /f Makefile.Debug`，`MAKE_EXIT=0`，无 error，仅既有 `BufferReader.h` C4267、`defin.h` C4996 warning；`CameraCapture.obj`／`RtmpPushManager.obj`／`RemoteManager.obj`／`RemoteWgt.obj` 及其 moc 重新编译，`debug/ECloudAssistant.exe` 重新链接（22:47）。（2）采集链路实机探针：枚举到 5 个 dshow 设备，其中唯一视频设备为 `2MP USB Camera`（dev[0]），`avformat_open_input("video=<设备名>")` 返回 0，实际 1920x1080、codec=mjpeg、解码格式 yuvj420p、avg_frame_rate≈30fps，连续解码 5 帧并 swscale 转 BGRA 成功（alpha=0xff），`RESULT: OK`；据此发现 `sws_getCachedContext` 对 yuvj420p 每帧重建（5 帧 5 次、5 条 deprecation 警告），改为按原始源参数自建 sws 缓存后重建次数=1。未验证：步骤 3 的双端 RTMP＋AVPlayer 实机画面、停止再启动、切回屏幕模式（本机无双端环境）。另注：MinGW 套件无法编译 WGC（缺 `windows.graphics.capture.interop.h`），本项目构建验证以 MSVC 套件为准。
+
+Commit ID: none（本轮未提交／推送）。Remaining limitation: （1）dshow 的 `read_packet` 阻塞在 `WaitForMultipleObjects(..., INFINITE)` 且不轮询 `interrupt_callback`，停止只能在下一帧到达后返回：摄像头正常出帧（≤约 33ms）时停止无碍，若设备中途停止出帧则 `RequestStop`／`Close` 可能阻塞到下一帧；`interrupt_callback` 已设置但对读取路径无效，仅对打开／探测阶段有意义。此项属第二阶段生命周期加固范围。（2）运行中尺寸变化会报错并停止当前会话，重开时按新尺寸重建编码器。（3）摄像头视频源选择目前只从被控端本地下拉入口生效，信令下发（控制端选择）尚未接入。（4）摄像头恒为 CPU BGRA＋libx264 软编，无 NVENC 直通；画中画、双路 RTMP 未实现。Rollback: 删除新增的 `VideoSource.h`、`CameraCapture.{h,cpp}` 及其在 `Pusher.pri` 的登记，把 `RtmpPushManager.{h,cpp}` 的 `videoSource_` 退回 `screen_Capture_`、去掉 `VideoSourceKind`／`SetupCameraPipeline`，恢复 `ScreenCapture.h` 的原始纯虚接口与 `RemoteWgt`／`RemoteManager` 的两项下拉及 0/1 语义即可；GDI/WGC 采集与编码行为未改变。
+
+## 采集方式接入信令
+
+Date: 2026-10-06. Goal: 把「采集方式」下拉的选择接入信令，使控制端可远程选择被控端的视频源（屏幕 GDI/WGC 或摄像头），不再只依赖被控端本地下拉入口。Affected files: 修改 `ECloudAssistant/UI/tool/defin.h`（注释）、`ECloudAssistant/Net/SigConnection.{h,cpp}`、`ECloudAssistant/UI/center/RemoteManager.cpp`、`ENET/SigServer/SigConnection.cpp`、`ENET/SigServer/define.h`，以及本日志。
+
+Behavior: 信令字段 `captureBackend`（单字节）扩展为 0=GDI、1=WGC、2=摄像头。客户端 `SigConnection::SetCaptureBackend` 与 `doCtreatStream`、服务端 `DoObtainStream` 原先各自把值钳在 0/1，现改为透传 0/1/2（非法值回退 0）；服务端是唯一的丢值点，未替换新 `SigSvr` 时值 2 会被丢成 0。控制端 `RemoteManager::StartRemote` 按本机下拉种类生成请求字节（摄像头→2，否则按 GDI/WGC 映射 0/1）随 OBTAINSTREAM 发出。被控端 `RemoteManager::HandleStartStream` 改为信令优先：按收到的字节设置 `VideoSourceKind` 与 `CaptureBackend`（0→屏幕 GDI、1→屏幕 WGC、2→摄像头），须在 `Open` 之前设定（`Init` 读 `videoSourceKind_`），并删除原先「本地已选摄像头时忽略信令」的守卫。由此被控端本地下拉退化为「本机作为控制端时的请求选择器」，收到连接后其本地选择被控制端下发值覆盖。`RemoteWgt` 下拉、`AVPlayer`/`PullerWgt` 的 uint8_t 透传、`ActiveBackendValue()` 与 `captureBackendStarted` 均无需改动。
+
+Verification: （1）客户端构建：Qt 6.10.1 MSVC2022 x64 Debug 下 `jom /f Makefile.Debug`，`MAKE_EXIT=0`；本次无新增文件故未重跑 qmake；`RemoteManager.cpp`／`RemoteWgt.cpp`／`AVPlayer.cpp`／`MainWgt.cpp` 及相关 moc 重新编译，`debug/ECloudAssistant.exe` 重新链接；仅既有 `BufferReader.h` C4267、`defin.h` C4996 warning。（2）服务端同源改动，需在构建 `SigSvr` 的 Linux VM 重新编译并替换 `ENET/build/bin/SigSvr` 后生效。未验证：双端信令闭环（控制端选摄像头→被控端推摄像头、选 GDI/WGC→对应屏幕后端）、旧控制端（仅发 0/1）兼容、被控端无摄像头或设备被占用时 CREATESTREAM 回 SERVER_ERROR 且不静默回退——本机无双端环境。
+
+Commit ID: none（本轮未提交／推送）。Remaining limitation: 服务端需重新编译替换；摄像头源仍为 CPU BGRA + libx264 软编，无 NVENC 直通；信令只在会话建立（CREATESTREAM）时决定视频源，运行中不切换。Rollback: 将 `captureBackend` 语义退回 0/1（`SigConnection.h`、客户端 `SigConnection.cpp`、服务端 `SigConnection.cpp` 恢复 `== 1 ? 1 : 0`），`RemoteManager::StartRemote` 退回 `GetCaptureBackend()==WGC?1:0`，`HandleStartStream` 恢复本地摄像头守卫，`defin.h`／`define.h` 注释还原；GDI/WGC 与摄像头采集本身行为不变。
+
+## 摄像头初步实现提交检查
+
+Date: 2026-10-06. Goal: 审阅并提交摄像头采集第一阶段及 UI／信令接入。Affected files: CameraCapture.{h,cpp}、VideoSource.h、ScreenCapture.h、RtmpPushManager.{h,cpp}、Pusher.pri、RemoteManager.{h,cpp}、RemoteWgt.cpp、客户端／服务端 SigConnection 与协议字段说明、摄像头方案及本日志。Behavior: 摄像头默认设备→CPU BGRA→libx264，复用现有推流；控制端请求编号 2 透传到被控端。审阅修复 CameraCapture::Decode 的尺寸变化分支：原先只返回 false 而 GetOneFrame 忽略该返回值，读取循环继续运行；现在设置 stop_，使本次读帧结束后退出并唤醒消费者。方案文档更新为初步实现状态。
+
+Verification: 提交前 MSVC2022／Qt 6.10.1 Debug 重新 qmake＋jom 构建链接成功，CameraCapture.cpp 重新编译，BUILD_EXIT=0；既有编码／事件循环回归测试退出 0，线程数 4→4、带填充行解码差异为 0。这次未重新打开摄像头或验证双端 RTMP，前述独立摄像头探针结果只作为已有证据。暂存范围限定摄像头功能及其文档，既有 WGC 实验／统计精简日志保留未暂存。
+
+Commit ID: 本节所属提交（用 `git log -1 --format=%H -- context/WORKLOG.md` 获取）。Remaining limitation: Linux 信令服务器需要重编译部署；双端播放、连续启停、异常设备／尺寸变化实机用例仍待验收；dshow 停止出帧时可能卡住 Close 的限制尚未解决。Rollback: 对本次提交进行常规 revert，保留其他工作区改动。

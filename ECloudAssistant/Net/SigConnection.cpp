@@ -258,7 +258,7 @@ void SigConnection::doCtreatStream(const packet_head* data)
         if(startStreamCb_)
         {
             //传到外部，由这个推流器开始推流 ,是否推流成功
-            const bool pushOpened = startStreamCb_(streamAddr,backend == 1 ? 1 : 0);
+            const bool pushOpened = startStreamCb_(streamAddr,backend <= 2 ? backend : 0);
             if(pushOpened)
             {
                 //推流成功
