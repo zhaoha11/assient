@@ -27,7 +27,6 @@ public:
     // 视频编码器种类，默认 Hardware：WGC 会优先尝试 GPU 直通硬编，失败自动回退软编；
     // 退化重建会话时把它设为 Software 即可强制走软编路径。
     void SetEncoderKind(VideoEncoderKind kind) { encoderKind_.store(kind); }
-    VideoEncoderKind GetEncoderKind() const { return encoderKind_.load(); }
     bool isClose(){return !isConnect.load();}
 signals:
     // 运行中编码路径不可恢复地失败，需要上层重建会话（软编路径）
@@ -44,7 +43,6 @@ protected:
     void EncodeAudio();
     void StopEncoder();
     void StopCapture();
-    bool IsKeyFrame(const uint8_t* data, uint32_t size);
     void PushVideo(const quint8* data, quint32 size);
     void PushAudio(const quint8* data, quint32 size);
 private:
@@ -53,7 +51,7 @@ private:
     std::atomic<VideoEncoderKind> encoderKind_{VideoEncoderKind::Hardware};
     std::atomic_bool exit_{false};
     std::atomic_bool isConnect{false};
-    EventLoop* loop_ = nullptr;
+    std::unique_ptr<EventLoop> loop_;
     // GPU 直通路径下采集与硬编共用的 D3D11 设备；仅在路径 A 创建
     std::unique_ptr<D3D11SharedContext> sharedGpu_;
     QString activePath_;

@@ -33,9 +33,11 @@ public:
     void RequestStop() override;
     // 停止采集线程并释放三块缓冲区。不能在消费者仍持有上一帧 VideoFrame 时调用。
     bool Close() override;
-    // 已产出的真实采集帧总数，供低频统计计采集帧率。
+    // 源帧数：已解出的采集帧总数，供低频统计计源帧率。
     // 与 VideoFrame::sequence 无关：后者是时钟量化后的时间格序号。
     quint64 GetCapturedFrames() const override;
+    // GDI 每解出一帧就发布进槽位，没有「一次取多帧」，故与源帧数同值
+    quint64 GetPublishedFrames() const override;
 protected:
     virtual void run() override;
 private:

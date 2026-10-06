@@ -16,9 +16,7 @@ bool SoftwareVideoEncoder::ConfigureCodec()
     //必须写 BASELINE：libx264 不映射 FF_PROFILE_H264_CONSTRAINED_BASELINE，
     //写后者会落到 default 分支被静默忽略，编码器仍按自己的默认档位输出
     codecContext_->profile = FF_PROFILE_H264_BASELINE;
-    //Level 4.0 对 1080p 只支持到 30 FPS（8160 宏块 × 30 = 244800，上限 245760），
-    //提高帧率必须同步提高 level，否则码流会超出所声明的等级
-    codecContext_->level = 40;
+    // 由 libx264 按尺寸、帧率和码率选择等级，避免把 1080p60 错声明为 Level 4.0。
     //再加上码率约束，降低编码延迟
     codecContext_->rc_min_rate = config_.video.bitrate;
     codecContext_->rc_max_rate = config_.video.bitrate;

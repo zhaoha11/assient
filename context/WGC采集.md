@@ -460,3 +460,58 @@ nvenc 最坏与 GDI 打平，常态仅其 1/4，且省掉整个 swscale。
 13. **`Open()` 重复调用泄漏 `codecContext`（阶段三）** —— 现象：候选编码器「依次尝试」会多次调 `Open`，旧代码只在析构释放 → 中间全部泄漏。解：`Open()` 开头先 `avcodec_free_context`。
 
 14. **日志运算符优先级坑** —— `qInfo() << ... << framesRef->data ? "ok" : "null"` 里 `<<` 优先级高于 `?:`，整行会变成条件表达式。已在代码注释标记，写日志时别再套悬空三元。
+
+
+
+
+
+总结复习：
+WGC输出什么格式？
+
+```c++
+pool = poolFactory.CreateFreeThreaded(
+    graphicsDevice,
+    winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+    2,
+    poolSize
+);
+//也就是说：WGC 原始输出不是 NV12，而是 BGRA；NV12 是后面 GPU 转换出来给 NVENC 用的。
+```
+
+数据的拷贝路径是什么？
+当前的数据流向是GPU显存，拷贝给编码线程，实现采集编码解耦，然后格式转换
+
+```c++
+输入 BGRA Texture
+↓
+VideoProcessorBlt
+↓
+输出 NV12 Texture
+//读取 + 计算 + 写入
+```
+
+所以当前路径：
+
+```c++
+WGC BGRA
+↓ CopyResource
+自有 BGRA
+↓ VideoProcessorBlt
+NV12
+//两次GPU拷贝
+```
+
+![WGC到NVENC的GPU编码数据流图](https://cdn.jsdelivr.net/gh/zhaoha11/my-img-bed@main/img/WGC%E5%88%B0NVENC%E7%9A%84GPU%E7%BC%96%E7%A0%81%E6%95%B0%E6%8D%AE%E6%B5%81%E5%9B%BE.png)
+
+
+PTS:
+
+时间差 ÷ 单帧时间 → 帧序号 → PTS
+
+宁愿跳帧，也不要把时间轴拖慢
+
+时间轴为准，即使采集帧数达不到实际帧数，PTS会显示跳帧
+
+
+
+那这里的RTMP时间戳转换有没有32位溢出风险？

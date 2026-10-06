@@ -5,6 +5,7 @@ INCLUDEPATH += $$PWD \
 HEADERS += \
     $$PWD/rtmp/FlvAvcPacket.h \
     $$PWD/RtmpPushManager.h \
+    $$PWD/StatsWindow.h \
     $$PWD/VideoPipelineStats.h \
     $$PWD/capture/AudioBuffer.h \
     $$PWD/capture/AudioCapture.h \

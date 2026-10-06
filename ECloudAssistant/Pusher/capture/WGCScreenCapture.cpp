@@ -1,6 +1,7 @@
 #include "WGCScreenCapture.h"
 #include "AV_Common.h"
 #include "D3D11SharedContext.h"
+#include "StatsWindow.h"
 
 #include <QDebug>
 #include <algorithm>
@@ -24,6 +25,39 @@ namespace wgd = winrt::Windows::Graphics::DirectX::Direct3D11;
 namespace
 {
 enum class ReadResult { none, frame, error };
+
+// 一次 Read 的副产物：都在采集线程本地取值，不跨线程。
+// drainedFrames / frameAgeUs 供帧率与帧龄统计；
+// lockWaitUs / copyUs 只在 GPU 分支有值，用来判断采集与编码是否在抢同一把 D3D 上下文锁。
+struct ReadTiming
+{
+    quint32 drainedFrames = 0;
+    qint64 frameAgeUs = 0;
+    quint64 lockWaitUs = 0;
+    quint64 copyUs = 0;
+};
+
+// 微秒取整，供本文件里的耗时打点复用
+quint64 ElapsedUs(std::chrono::steady_clock::time_point begin)
+{
+    return static_cast<quint64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - begin).count());
+}
+
+// 当前时间，单位 100ns，与 Direct3D11CaptureFrame::SystemRelativeTime 同口径（QPC）。
+// 用商余拆分换算，避免 counter * 1e7 在长时间运行后溢出。
+quint64 QpcNow100ns()
+{
+    static const quint64 frequency = []{
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        return static_cast<quint64>(f.QuadPart);
+    }();
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    const quint64 c = static_cast<quint64>(counter.QuadPart);
+    return (c / frequency) * 10000000ULL + (c % frequency) * 10000000ULL / frequency;
+}
 
 // GPU 帧句柄：持有自有纹理和 device，保证编码线程使用期间纹理有效；
 // 同时持有 device 引用，即使采集端先退出也不会让纹理落在已销毁的 device 上。
@@ -58,6 +92,9 @@ struct WgcState
     bool gpuTexture = false;   // true：直接输出 GPU 纹理；false：读回 CPU BGRA
     // 上层注入的共享 device（可空）。非空时直接复用它，采集纹理才能与硬件编码器同 device。
     D3D11SharedContext* shared = nullptr;
+    // FrameArrived 事件计数（诊断用）。回调只 fetch_add 这个原子、不碰 WgcState，
+    // 因此即使它在采集对象析构途中仍在执行也不会踩到已释放的内存。
+    std::shared_ptr<std::atomic<quint64>> frameArrived;
     HMONITOR monitor = nullptr;
     winrt::Windows::Graphics::SizeInt32 poolSize{0,0};
     ComPtr<ID3D11Device> device;
@@ -69,6 +106,7 @@ struct WgcState
     ComPtr<ID3D11Texture2D> staging;
     UINT stagingWidth = 0;
     UINT stagingHeight = 0;
+    bool ageProbeLogged = false;   // 帧龄口径只打一次原始值
 
     // 先关闭捕获会话和帧池，再由工作线程解除 WinRT 初始化。
     ~WgcState()
@@ -144,15 +182,25 @@ struct WgcState
             poolSize = item.Size();
             if(poolSize.Width <= 0 || poolSize.Height <= 0) return false;
 
+            // 帧池缓冲数：可调，是「FrameArrived 计数不到」的那部分丢帧的唯一探针。
+            // 池满后 WGC 直接丢弃新帧且不计数，所以只有放大这个数才能验证池溢出是否在吃帧率。
+            constexpr int kFramePoolBuffers = 2;
             auto poolFactory = winrt::get_activation_factory<wgc::IDirect3D11CaptureFramePoolStatics2>(
                 winrt::name_of<wgc::Direct3D11CaptureFramePool>());
             pool = poolFactory.CreateFreeThreaded(
                 graphicsDevice,winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                2,poolSize);
+                kFramePoolBuffers,poolSize);
             session = pool.CreateCaptureSession(item);
             session.IsCursorCaptureEnabled(true);
+            // 只计数、不取帧：把「WGC 到底产了多少帧」与「我们 drain 了多少」分开，
+            // 从而判断丢失的帧是 Windows 没给，还是我们自己的轮询/交接弄丢的。
+            pool.FrameArrived([count = frameArrived](auto&&, auto&&)
+            {
+                if(count) count->fetch_add(1,std::memory_order_relaxed);
+            });
             session.StartCapture();
             qInfo() << "WGC primary monitor capture" << poolSize.Width << "x" << poolSize.Height
+                    << "buffers =" << kFramePoolBuffers
                     << (gpuTexture ? "gpu texture" : "cpu readback");
             return true;
         }
@@ -179,8 +227,16 @@ struct WgcState
     // gpuTexture 为真时把纹理复制进自有的默认用法纹理，产出 GPU 帧；
     // 否则经 staging 读回紧凑 BGRA，产出 CPU 帧。
     // 无帧、取得新帧、读取失败分别返回 none、frame、error。
-    ReadResult Read(VideoFrame& out)
+    // drainedFrames 回传本次从池里实际取走的帧数：一次最多取四帧，较旧的被主动丢弃，
+    // 但它们确实是 WGC 产出的源帧，必须计数，否则源帧率会被少算成「拿到过帧的轮询次数」。
+    // frameAgeUs 回传所留帧的帧龄（合成器渲染该帧 到 现在），仅在返回 frame 时有效；
+    // 负值表示时钟口径异常，如实上报由调用方单独计数，不截零。
+    // lockWaitUs / copyUs 只在 GPU 分支填写：等锁时长与 CopyResource 调用耗时。
+    ReadResult Read(VideoFrame& out, ReadTiming& timing)
     {
+        timing = ReadTiming();
+        quint32& drainedFrames = timing.drainedFrames;
+        qint64& frameAgeUs = timing.frameAgeUs;
         wgc::Direct3D11CaptureFrame newest{nullptr};
         try
         {
@@ -189,10 +245,26 @@ struct WgcState
             {
                 auto frame = pool.TryGetNextFrame();
                 if(!frame) break;
+                ++drainedFrames;
                 if(newest) newest.Close();
                 newest = std::move(frame);
             }
             if(!newest) return ReadResult::none;
+
+            // 帧龄必须在这里采样：放到 CopyResource / Close 之后会把复制与锁等待也算进去。
+            // 两个值同为 QPC 口径的 100ns 计数，直接相减即为「合成到取帧」的年龄。
+            {
+                const qint64 rendered100ns = static_cast<qint64>(newest.SystemRelativeTime().count());
+                const qint64 now100ns = static_cast<qint64>(QpcNow100ns());
+                frameAgeUs = (now100ns - rendered100ns) / 10;
+                if(!ageProbeLogged)
+                {
+                    // 首帧打一次原始值，用来人工确认两个时钟确实同源（差应接近本帧真实年龄）
+                    qInfo() << "[CAP-STATS] first frame age probe, sr100ns =" << rendered100ns
+                            << "qpc100ns =" << now100ns << "ageUs =" << frameAgeUs;
+                    ageProbeLogged = true;
+                }
+            }
 
             const auto content = newest.ContentSize();
             auto surface = newest.Surface();
@@ -235,8 +307,12 @@ struct WgcState
                     return ReadResult::error;
                 }
                 {
+                    const std::chrono::steady_clock::time_point lockBegin = std::chrono::steady_clock::now();
                     std::unique_lock<std::mutex> contextLock = lockContext();
+                    timing.lockWaitUs = ElapsedUs(lockBegin);
+                    const std::chrono::steady_clock::time_point copyBegin = std::chrono::steady_clock::now();
                     context->CopyResource(owned.Get(),texture.Get());
+                    timing.copyUs = ElapsedUs(copyBegin);
                 }
 
                 out = VideoFrame{};
@@ -348,7 +424,10 @@ bool WGCScreenCapture::Init(qint64 display_index)
     Q_UNUSED(display_index); // 与 GDI 一样，当前只采集主显示器。
     if(worker_.joinable()) return initOk_;
     stop_.store(false);
-    capturedFrames_.store(0);
+    sourceFrames_.store(0);
+    publishedFrames_.store(0);
+    //每次会话换一个新的计数器：旧的回调可能还没跑完，不能复用同一个原子
+    frameArrived_ = std::make_shared<std::atomic<quint64>>(0);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopped_ = false;
@@ -436,6 +515,7 @@ void WGCScreenCapture::Run()
         state.reset(new WgcState());
         state->gpuTexture = gpuOutput;
         state->shared = shared;
+        state->frameArrived = frameArrived_;
         if(!state->Open()) state.reset();
     }
     {
@@ -464,9 +544,55 @@ void WGCScreenCapture::Run()
     quint64 lastSequence = 0;
     VideoFrame lastFrame;
     auto nextMonitorCheck = Clock::now() + std::chrono::seconds(1);
+    //采集侧独立统计：本行每秒自打，不依赖编码完成，编码卡住时采集指标仍然可见。
+    auto capStatsBegin = Clock::now();
+    auto nextCapStats = capStatsBegin + std::chrono::seconds(1);
+    quint64 lastReportSource = 0;
+    quint64 lastReportPublished = 0;
+    quint64 lastReportArrived = 0;
+    quint64 negativeAges = 0;     //帧龄为负的次数，与符号无关地单独计数
+    //帧龄可能为负，必须有符号窗口，否则负值会被折叠成巨大正数、min 也失去意义
+    SampleWindow<qint64> ageWindow;
+    UsWindow lockWaitWindow;      //等 ContextLock 的时长
+    UsWindow copyWindow;          //CopyResource 调用耗时
     while(!stop_.load())
     {
         const auto now = Clock::now();
+        if(now >= nextCapStats)
+        {
+            const quint64 elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          now - capStatsBegin).count();
+            const quint64 source = sourceFrames_.load();
+            const quint64 published = publishedFrames_.load();
+            const quint64 arrived = frameArrived_ ? frameArrived_->load() : 0;
+            const quint64 sourceDelta = source - lastReportSource;
+            const quint64 publishedDelta = published - lastReportPublished;
+            const quint64 droppedDelta = sourceDelta > publishedDelta ? sourceDelta - publishedDelta : 0;
+            const quint64 arrivedDelta = arrived >= lastReportArrived ? arrived - lastReportArrived : 0;
+            const double perSecond = elapsedUs ? 1000000.0 / elapsedUs : 0.0;
+            qInfo() << QString("[CAP-STATS] 源帧率 = %1 发布帧率 = %2 FrameArrived率 = %3 丢旧帧 = %4"
+                               " 帧龄最小us = %5 帧龄均值us = %6 帧龄P95us = %7 帧龄负值 = %8"
+                               " 取锁均值us = %9 取锁P95us = %10 Copy均值us = %11")
+                       .arg(sourceDelta * perSecond, 0, 'f', 1)
+                       .arg(publishedDelta * perSecond, 0, 'f', 1)
+                       .arg(arrivedDelta * perSecond, 0, 'f', 1)
+                       .arg(droppedDelta)
+                       .arg(ageWindow.Min())
+                       .arg(ageWindow.Mean())
+                       .arg(ageWindow.Percentile(0.95))
+                       .arg(negativeAges)
+                       .arg(lockWaitWindow.Mean())
+                       .arg(lockWaitWindow.Percentile(0.95))
+                       .arg(copyWindow.Mean());
+            lastReportSource = source;
+            lastReportPublished = published;
+            lastReportArrived = arrived;
+            ageWindow.Reset();
+            lockWaitWindow.Reset();
+            copyWindow.Reset();
+            capStatsBegin = now;
+            nextCapStats = now + std::chrono::seconds(1);
+        }
         if(now >= nextMonitorCheck)
         {
             nextMonitorCheck = now + std::chrono::seconds(1);
@@ -482,6 +608,7 @@ void WGCScreenCapture::Run()
             state.reset(new WgcState());
             state->gpuTexture = gpuOutput;
             state->shared = shared;
+            state->frameArrived = frameArrived_;
             if(!state->Open())
             {
                 state.reset();
@@ -493,7 +620,10 @@ void WGCScreenCapture::Run()
             }
         }
 
-        const ReadResult result = state->Read(lastFrame);
+        ReadTiming timing;
+        const ReadResult result = state->Read(lastFrame,timing);
+        //从池里取走的都算源帧，含本次被丢弃的较旧帧；错误前吞掉的也算，它们已离开池
+        sourceFrames_ += timing.drainedFrames;
         if(result == ReadResult::error)
         {
             qWarning() << "WGC frame read failed; restarting capture session";
@@ -501,10 +631,16 @@ void WGCScreenCapture::Run()
             lastFrame = VideoFrame{};
             continue;
         }
-        //只有真取到新帧才计入采集帧数；下面复用上一帧重复发布不算
+        //帧龄只在真的取到新帧时有效；负值照样进有符号窗口，另单独计数看异常比例
         if(result == ReadResult::frame)
         {
-            ++capturedFrames_;
+            ageWindow.Add(timing.frameAgeUs);
+            if(timing.frameAgeUs < 0)
+            {
+                ++negativeAges;
+            }
+            lockWaitWindow.Add(timing.lockWaitUs);
+            copyWindow.Add(timing.copyUs);
         }
         // 帧池暂时无新帧时沿用上一帧，按目标帧率继续发布递增序号。
         const bool hasFrame = (lastFrame.kind == VideoFrameKind::Gpu) ? static_cast<bool>(lastFrame.gpu)
@@ -519,6 +655,11 @@ void WGCScreenCapture::Run()
                 sequence = lastSequence + 1;
             }
             lastSequence = sequence;
+            //只有真的发布了一张新画面才计入发布数；复用上一帧补节拍不算
+            if(result == ReadResult::frame)
+            {
+                ++publishedFrames_;
+            }
             Publish(lastFrame,sequence);
         }
         nextTick += interval;

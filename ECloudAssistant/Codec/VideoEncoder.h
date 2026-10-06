@@ -5,6 +5,7 @@
 #include "VideoConvert.h"
 
 class IGpuVideoFrame;
+struct CpuFrameView;
 
 // H.264 编码器基类：把软编/硬编共享的部分集中在这里——FFmpeg 上下文创建、
 // CPU BGRA→目标像素格式的转换、send/receive、以及 SPS/PPS extradata 生成。
@@ -20,7 +21,8 @@ public:
     virtual bool Open(AVConfig& video_config) override;
     virtual void Close()override;
     //pts 必须是显式传入的单调递增序号：编码器时间基为 1/帧率，序号差即帧间隔。
-    virtual AVPacketPtr Encode(const quint8* data,quint32 width,quint32 height,qint64 pts,
+    // CPU 缓冲仅在本次同步转换期间借用，编码器只持有转换后的独立帧。
+    virtual AVPacketPtr Encode(const CpuFrameView& cpu,quint32 width,quint32 height,qint64 pts,
                                VideoEncodeTiming* timing = nullptr);
     // GPU 纹理路径：只有硬件编码器在 GPU 模式下实现，其余（含软编）沿用默认返回 nullptr。
     virtual AVPacketPtr EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,
@@ -36,8 +38,6 @@ protected:
     // 返回 false 表示该编码器不可用，Open 会整体失败交给上层回退。
     virtual bool ConfigureCodec() = 0;
 private:
-    quint32 width_;
-    quint32 height_;
     //上一次用于建立转换器的输入尺寸，与编码器尺寸无关（编码器尺寸可能被截成偶数）
     quint32 sourceWidth_;
     quint32 sourceHeight_;

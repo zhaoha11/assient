@@ -66,6 +66,12 @@ quint64 GDIScreenCapture::GetCapturedFrames() const
     return capturedFrames_.load();
 }
 
+quint64 GDIScreenCapture::GetPublishedFrames() const
+{
+    //GDI 每解出一帧就写进三缓冲并交换索引，没有「一次取多帧后丢旧帧」，两个计数同源
+    return capturedFrames_.load();
+}
+
 bool GDIScreenCapture::Init(qint64 display_index)
 {
     if(is_initialzed_)

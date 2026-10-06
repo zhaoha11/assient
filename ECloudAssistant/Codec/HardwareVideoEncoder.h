@@ -23,7 +23,6 @@ public:
     AVPacketPtr EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,
                                VideoEncodeTiming* timing = nullptr) override;
     bool HasFatalError() const override { return fatalError_.load(); }
-    bool IsGpuMode() const { return gpuMode_; }
 
 protected:
     AVCodec* FindCodec() override;

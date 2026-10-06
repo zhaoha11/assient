@@ -273,8 +273,14 @@ AVPacketPtr HardwareVideoEncoder::EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,
     // 立即上下文非线程安全：采集线程也在用它做 CopyResource，建 view 与 Blt 要跟它串行。
     // 但锁只罩这一段 GPU 转换——send/receive 走 nvenc 自己的队列，不碰立即上下文；
     // delay=0 之后 receive 每帧阻塞数 ms，锁若带进去会让采集线程整帧排在编码后面。
+    quint64 lockWaitUs = 0;
+    quint64 bltUs = 0;
     {
+        const std::chrono::steady_clock::time_point lockBegin = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lock(shared_->ContextLock());
+        //拿到锁这一刻即排队时长：这里是采集线程 CopyResource 与编码线程 Blt 的唯一交汇点
+        lockWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - lockBegin).count();
 
         if(!gpu_->ensure(*shared_,codecContext_,inputTexture))
         {
@@ -323,7 +329,10 @@ AVPacketPtr HardwareVideoEncoder::EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,
         stream.Enable = TRUE;
         stream.pInputSurface = inputView.Get();
 
+        const std::chrono::steady_clock::time_point bltBegin = std::chrono::steady_clock::now();
         hr = shared_->videoContext()->VideoProcessorBlt(gpu_->processor.Get(),outputView.Get(),0,1,&stream);
+        bltUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - bltBegin).count();
         if(FAILED(hr))
         {
             qWarning() << "[ENCODE] VideoProcessorBlt failed" << Qt::hex << hr;
@@ -332,6 +341,12 @@ AVPacketPtr HardwareVideoEncoder::EncodeGpuFrame(IGpuVideoFrame& gpu,qint64 pts,
         }
     }
 
+    if(timing)
+    {
+        //Blt 就是 GPU 侧的 BGRA→NV12 转换，与 CPU 路径的 swscale 共用 convertUs 口径
+        timing->lockWaitUs = lockWaitUs;
+        timing->convertUs = bltUs;
+    }
     NoteFrameSent();
     const int sendResult = avcodec_send_frame(codecContext_,frame.get());
     if(sendResult < 0)

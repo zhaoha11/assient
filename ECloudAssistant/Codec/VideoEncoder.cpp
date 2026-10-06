@@ -1,6 +1,8 @@
 #include "VideoEncoder.h"
+#include "VideoFrame.h"
 #include <QDebug>
 #include <chrono>
+#include <limits>
 
 extern "C"
 {
@@ -10,9 +12,7 @@ extern "C"
 }
 
 VideoEncoder::VideoEncoder()
-    :width_(0)
-    ,height_(0)
-    ,sourceWidth_(0)
+    :sourceWidth_(0)
     ,sourceHeight_(0)
     ,rgba_frame_(nullptr)
     ,h264_packet_(nullptr)
@@ -88,16 +88,12 @@ bool VideoEncoder::Open(AVConfig &video_config)
         return false;
     }
 
-    width_ = config_.video.width;
-    height_ = config_.video.height;
     is_initialzed_ = true;
     return true;
 }
 
 void VideoEncoder::Close()
 {
-    width_ = 0;
-    height_ = 0;
     sourceWidth_ = 0;
     sourceHeight_ = 0;
     is_initialzed_ = false;
@@ -117,15 +113,15 @@ void VideoEncoder::Close()
     {
         converter_->Close();
         converter_.reset();
-        converter_ = nullptr;
     }
 }
 
-AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 height,
+AVPacketPtr VideoEncoder::Encode(const CpuFrameView& cpu, quint32 width, quint32 height,
                                  qint64 pts, VideoEncodeTiming* timing)
 {
     //开始编码
-    if(!is_initialzed_)
+    if(!is_initialzed_ || !cpu.data || width == 0 || height == 0 || cpu.stride < width * 4 ||
+       cpu.stride > static_cast<quint32>((std::numeric_limits<int>::max)()))
     {
         return nullptr;
     }
@@ -140,48 +136,25 @@ AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 heig
         {
             //初始化失败
             converter_.reset();
-            converter_ = nullptr;
             return nullptr;
         }
 
-        // This frame holds source pixels, which can be one pixel larger than
-        // the even YUV420/H.264 encoder dimensions.
-        // 换尺寸前先释放上一轮的像素缓冲：对已分配的帧重复 get_buffer 是泄漏加未定义行为
-        av_frame_unref(rgba_frame_.get());
-        rgba_frame_->width = width;
-        rgba_frame_->height = height;
-        //指定格式
-        rgba_frame_->format = config_.video.format;
-        //获取内存
-        if(av_frame_get_buffer(rgba_frame_.get(),32) != 0)//四字节rgba
-        {
-            return nullptr;
-        }
         sourceWidth_ = width;
         sourceHeight_ = height;
     }
 
-    //我们将输入数据转到这个rgbaframe来去转换。
-    //目标跨距由 av_frame_get_buffer 的 32 字节对齐决定，不是每行都等于 width*4，
-    //而源缓冲是紧凑布局的 BGRA，所以必须按行复制而不能整块 memcpy。
-    const qint32 dstStride = rgba_frame_->linesize[0];
-    const quint32 srcStride = width * 4;
-    for(quint32 y = 0; y < height; ++y)
-    {
-        memcpy(rgba_frame_->data[0] + y * dstStride,data + y * srcStride,srcStride);
-    }
-
-    //转换
-    if(!converter_)
-    {
-        return nullptr;
-    }
-
-    //开始转换
-    //准备输出
+    // 只借用采集缓冲作为 swscale 输入；转换同步完成后解除借用，不分配或复制 BGRA。
+    rgba_frame_->width = width;
+    rgba_frame_->height = height;
+    rgba_frame_->format = config_.video.format;
+    rgba_frame_->data[0] = const_cast<quint8*>(cpu.data);
+    rgba_frame_->linesize[0] = static_cast<int>(cpu.stride);
     const std::chrono::steady_clock::time_point convertBegin = std::chrono::steady_clock::now();
     AVFramePtr out_frame = nullptr;
-    if(converter_->Convert(rgba_frame_,out_frame) <= 0)
+    const int converted = converter_->Convert(rgba_frame_,out_frame);
+    rgba_frame_->data[0] = nullptr;
+    rgba_frame_->linesize[0] = 0;
+    if(converted <= 0)
     {
         return nullptr;
     }

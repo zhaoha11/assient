@@ -60,9 +60,12 @@ struct AVConfig
 };
 
 // 单帧编码路径的分段耗时，单位为微秒。阶段一低频统计使用，阶段三验收后移除。
+// convertUs：把采集帧转成编码器像素格式的耗时（CPU 路径是 swscale，GPU 路径是 VideoProcessorBlt）。
+// lockWaitUs：等共享 D3D11 立即上下文锁的耗时，只有 GPU 路径非零；用来判断采集与编码是否在互相排队。
 struct VideoEncodeTiming
 {
     quint64 convertUs = 0;
+    quint64 lockWaitUs = 0;
     quint64 encodeUs = 0;
 };
 

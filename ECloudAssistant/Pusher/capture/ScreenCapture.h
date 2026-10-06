@@ -21,12 +21,14 @@ public:
     virtual bool Close() = 0;
     virtual quint32 GetWidth() const = 0;
     virtual quint32 GetHeight() const = 0;
-    // 已产出的真实采集帧总数，供低频统计计采集帧率；
+    // 源帧数：采集端实际产出的帧总数，供低频统计计源帧率；
     // 与 VideoFrame::sequence 无关：后者是时钟量化后的时间格序号，用于派生 PTS。
     virtual quint64 GetCapturedFrames() const = 0;
+    // 发布帧数：真正发布进最新帧槽位的新画面数。GDI 每解出一帧就进槽位，与源帧数同值；
+    // WGC 帧池无新帧时复用上一帧补节拍，两者之差即主动丢弃的旧帧数。
+    virtual quint64 GetPublishedFrames() const = 0;
 
-    // 输出形态能力：不支持的实现直接沿用默认值（GDI 即如此）。
-    virtual bool SupportsGpuOutput() const { return false; }
+    // 不支持指定输出形态的实现直接返回 false（GDI 即如此）。
     virtual bool SetOutput(CaptureOutput) { return false; }
 
     // 采集与硬件编码共用同一个 D3D11 device 时由上层注入；不支持共享的实现沿用默认值。

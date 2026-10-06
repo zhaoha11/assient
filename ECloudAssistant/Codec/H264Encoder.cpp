@@ -11,8 +11,6 @@ H264Encoder::H264Encoder()
     :config_{}
     ,h264_encoder_(nullptr)
 {
-    //默认先放一个软编占位，保证成员非空；OPen 时按需替换
-    h264_encoder_.reset(new SoftwareVideoEncoder());
 }
 
 H264Encoder::~H264Encoder()
@@ -23,6 +21,7 @@ H264Encoder::~H264Encoder()
 bool H264Encoder::OPen(qint32 width, qint32 height, qint32 framerate, qint32 bitrate, qint32 format,
                        VideoEncoderKind kind, D3D11SharedContext* shared)
 {
+    Close();
     //初始化编码器
     config_.video.width = width;
     config_.video.height = height;
@@ -69,6 +68,7 @@ bool H264Encoder::OPen(qint32 width, qint32 height, qint32 framerate, qint32 bit
     h264_encoder_.reset(new SoftwareVideoEncoder());
     if(!h264_encoder_->Open(config_))
     {
+        Close();
         return false;
     }
     qInfo() << "[ENCODE] active encoder =" << h264_encoder_->EncoderName();
@@ -77,22 +77,7 @@ bool H264Encoder::OPen(qint32 width, qint32 height, qint32 framerate, qint32 bit
 
 void H264Encoder::Close()
 {
-    h264_encoder_->Close();
-}
-
-qint32 H264Encoder::Encode(const quint8 *rgba_buffer, quint32 width, quint32 height, qint64 pts,
-                           std::vector<quint8> &out_frame, VideoEncodeTiming *timing)
-{
-    //编码264
-    out_frame.clear();
-    //开始编码
-    AVPacketPtr pkt = h264_encoder_->Encode(rgba_buffer,width,height,pts,timing);
-    if(!pkt)
-    {
-        //编码失败
-        return -1;
-    }
-    return EmitPacket(pkt,out_frame);
+    h264_encoder_.reset();
 }
 
 // 关键帧前置 extradata（SPS/PPS），再拼上裸流：[编码信息 + 264 裸流]
@@ -103,28 +88,19 @@ qint32 H264Encoder::EmitPacket(AVPacketPtr pkt,std::vector<quint8>& out_frame)
         out_frame.clear();
         return -1;
     }
-    int frame_size = 0;
-    int max_out_size = config_.video.width * config_.video.height * 4;//设大一点 因为这个编码数据不会大于这个原始数据RGBA
-    std::shared_ptr<quint8> out_buffer(new quint8[max_out_size],std::default_delete<quint8[]>());
-    //判断是否是关键帧 如果是关键帧需要在264前面添加编码信息
-    if(IsKeyFrame(pkt))
+    const AVCodecContext* codecContext = h264_encoder_->GetAVCodecContext();
+    const int header_size = (pkt->flags & AV_PKT_FLAG_KEY) ? codecContext->extradata_size : 0;
+    const int frame_size = header_size + pkt->size;
+    out_frame.resize(frame_size);
+    if(header_size > 0)
     {
-        AVCodecContext* codecContext = h264_encoder_->GetAVCodecContext();
-        //编码信息放到包头去解析
-        memcpy(out_buffer.get(),codecContext->extradata,codecContext->extradata_size);
-        frame_size += codecContext->extradata_size;
+        memcpy(out_frame.data(),codecContext->extradata,header_size);
     }
-    memcpy(out_buffer.get() + frame_size,pkt->data,pkt->size);
-    frame_size += pkt->size;
-
-    //需要将数据传出去out_frame
-    if(frame_size > 0)
+    if(pkt->size > 0)
     {
-        out_frame.resize(frame_size);
-        out_frame.assign(out_buffer.get(),out_buffer.get() + frame_size);
-        return frame_size;
+        memcpy(out_frame.data() + header_size,pkt->data,pkt->size);
     }
-    return 0;
+    return frame_size;
 }
 
 qint32 H264Encoder::EncodeFrame(const VideoFrame &frame, qint64 pts,
@@ -137,7 +113,7 @@ qint32 H264Encoder::EncodeFrame(const VideoFrame &frame, qint64 pts,
             out_frame.clear();
             return -1;
         }
-        return EncodeGpuFrame(*frame.gpu,frame.width,frame.height,pts,out_frame,timing);
+        return EncodeGpuFrame(*frame.gpu,pts,out_frame,timing);
     }
     return EncodeCpuFrame(frame.cpu,frame.width,frame.height,pts,out_frame,timing);
 }
@@ -145,21 +121,18 @@ qint32 H264Encoder::EncodeFrame(const VideoFrame &frame, qint64 pts,
 qint32 H264Encoder::EncodeCpuFrame(const CpuFrameView &cpu, quint32 width, quint32 height, qint64 pts,
                                    std::vector<quint8> &out_frame, VideoEncodeTiming *timing)
 {
-    if(!cpu.data)
+    out_frame.clear();
+    if(!h264_encoder_ || !cpu.data)
     {
-        out_frame.clear();
         return -1;
     }
-    // 采集侧输出的 CPU 帧是紧凑 BGRA（stride == width*4），Encode 内部即按此跨度拷贝
-    return Encode(cpu.data,width,height,pts,out_frame,timing);
+    return EmitPacket(h264_encoder_->Encode(cpu,width,height,pts,timing),out_frame);
 }
 
 // 把采集侧的 GPU 纹理交给编码器：只有硬件编码器在 GPU 模式下能消费，其余返回失败。
-qint32 H264Encoder::EncodeGpuFrame(IGpuVideoFrame &gpu, quint32 width, quint32 height, qint64 pts,
+qint32 H264Encoder::EncodeGpuFrame(IGpuVideoFrame &gpu, qint64 pts,
                                    std::vector<quint8> &out_frame, VideoEncodeTiming *timing)
 {
-    Q_UNUSED(width);
-    Q_UNUSED(height);
     out_frame.clear();
     if(!h264_encoder_)
     {
@@ -180,20 +153,16 @@ bool H264Encoder::HasFatalError() const
 
 qint32 H264Encoder::GetSequenceParams(quint8 *out_buffer, qint32 out_buffer_size)
 {
-    //获取编码参数
-    quint32 size = 0;
-    if(!h264_encoder_->GetAVCodecContext())
+    if(!h264_encoder_ || !out_buffer)
     {
         return -1;
     }
-    AVCodecContext* codecContxt = h264_encoder_->GetAVCodecContext();
-    size = codecContxt->extradata_size;
-    memcpy(out_buffer,codecContxt->extradata,codecContxt->extradata_size);
-    return size;
-}
-
-bool H264Encoder::IsKeyFrame(AVPacketPtr pkt)
-{
-    //判断是否为关键帧
-    return pkt->flags & AV_PKT_FLAG_KEY;
+    const AVCodecContext* codecContext = h264_encoder_->GetAVCodecContext();
+    if(!codecContext || !codecContext->extradata || codecContext->extradata_size <= 0 ||
+       out_buffer_size < codecContext->extradata_size)
+    {
+        return -1;
+    }
+    memcpy(out_buffer,codecContext->extradata,codecContext->extradata_size);
+    return codecContext->extradata_size;
 }

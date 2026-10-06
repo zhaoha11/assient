@@ -24,9 +24,12 @@ bool VideoConverter::Open(qint32 in_width, qint32 in_height, AVPixelFormat in_fo
     }
 
     //初始化转换器
+    // 奇数宽 BGRA 先保留全宽色度再缩放，避免右边缘色度受源行填充内容影响。
+    const int flags = SWS_BICUBIC | ((in_format == AV_PIX_FMT_BGRA && (in_width & 1))
+                                     ? SWS_FULL_CHR_H_INP : 0);
     swsContext_ = sws_getContext(in_width,in_height,in_format,
                                  out_width,out_height,out_format,
-                                 SWS_BICUBIC,NULL,NULL,NULL);
+                                 flags,NULL,NULL,NULL);
     width_ = out_width;
     height_ = out_height;
     format_ = out_format;

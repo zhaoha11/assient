@@ -23,7 +23,7 @@ TaskScheduler::~TaskScheduler()
 
 void TaskScheduler::Start()
 {
-    is_shutdown_ = false;
+    // 初始状态已由构造函数设置；不能覆盖线程启动前收到的 Stop。
     while (!is_shutdown_)
     {
         //处理定时事件

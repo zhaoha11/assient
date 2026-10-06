@@ -14,7 +14,7 @@ public:
     int  OpenUrl(std::string url, int msec);
     // data contains a complete Annex-B access unit, including start codes.
     int  PushVideoFrame(const uint8_t *data, uint32_t size);
-    int  PushAudioFrame(uint8_t *data, uint32_t size);
+    int  PushAudioFrame(const uint8_t *data, uint32_t size);
     void Close();
     bool IsConnected();
     bool IsPublishing();

@@ -1424,3 +1424,95 @@ Affected files: `ECloudAssistant/Codec/AV_Common.h`, `ECloudAssistant/Pusher/cap
 Behavior: `AV_Common.h` 新增 `inline quint64 MakeSequence(now, start)`，把采集完成时刻相对会话起点量化到 `1/kTargetFramerate` 的时间格（四舍五入到最近格）。GDI 与 WGC 各自维护一个会话起点与上一次的序号，用 `sequence = max(MakeSequence(...), 上次序号 + 1)` 保证严格单调，两帧过近落进同一格时也不会重叠或倒退。`sequence` 从此只表示时间轴位置，由 `EncodeVideo` 用 `frame.sequence - firstSequence` 派生 PTS，行为不变。由于 `sequence` 不再是「真实帧数」，统计所需的真实帧计数单独拆出：`ScreenCapture::GetCaptureSequence()` 改名为 `GetCapturedFrames()`，语义变为「已产出的真实采集帧总数」——GDI 每解码出一帧 +1，WGC 只在 `Read` 真取到新帧时 +1（复用上一帧重复发布不计数），`VideoPipelineStats` 的 `采集帧数/采集帧率` 改用它。`重复`（同序号被再次编码）与 `跳帧`（序号差）仍走 `sequence`，`跳帧` 的单位现在明确是时间格。
 
 Verification: Qt 6.10.1 MSVC2022 Debug 在 `ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug` 重新 `qmake` 生成 Makefile 后 `jom /f Makefile.Debug -j4` 编译链接通过，exit 0，无 error（仅既有 warning）；确认 `GDISreenScapture.obj`、`WGCScreenCapture.obj`、`RtmpPushManager.obj`、`VideoPipelineStats.obj` 均重新编译、`debug/ECloudAssistant.exe` 重新链接，再次增量构建报无工作、exit 0。未验证：GDI 在 60Hz 目标下时间轴是否真与真实时间对齐、以及 WGC 复用上一帧时 `采集帧数 < 编码帧数` 的统计读数——均需 SRS + 双端实机运行观察 `[PIPE-STATS]`。Commit ID: none. Rollback: 删除 `MakeSequence` 与 `sessionStart_/lastSequence_`，把 `capturedFrames_` 恢复为自增序号并改回 `GetCaptureSequence()` 即可。
+
+
+## 修正 WGC 采集帧率统计口径：源帧数 vs 发布帧数
+
+Date: 2026-10-06. Goal: 修正 WGC 的采集帧率被少算的问题。`WgcState::Read` 每次最多 `TryGetNextFrame()` 四帧、只保留最新一帧，较旧的直接 `Close()` 丢弃，但没有任何地方为这些被丢弃的帧记账；`Run()` 原本只对「本次轮询至少拿到一帧」`++capturedFrames_`。于是该计数的真实语义是「拿到过帧的轮询次数」，而不是 WGC 实际产出的帧数——60Hz 轮询下若若干次各取到两帧，源帧率会被低估（例如真实 60，统计成 45）。这直接导致「WGC 只能采 45～50 FPS」的结论不成立，必须先把口径改对再判断采集性能。
+
+Affected files: `ECloudAssistant/Pusher/capture/ScreenCapture.h`, `ECloudAssistant/Pusher/capture/GDISreenScapture.{h,cpp}`, `ECloudAssistant/Pusher/capture/WGCScreenCapture.{h,cpp}`, `ECloudAssistant/Pusher/VideoPipelineStats.{h,cpp}`, `ECloudAssistant/Pusher/RtmpPushManager.cpp`, and this worklog.
+
+Behavior: `WgcState::Read` 增加出参 `quint32& drainedFrames`，每次 `TryGetNextFrame()` 成功即 `++drainedFrames`；`Run()` 改为 `sourceFrames_ += drainedFrames`（放在 error 分支之前——错误前被吞掉的帧也已离开帧池，同样计入源帧），仅在 `result == frame` 时 `++publishedFrames_`。两个计数分开暴露：`GetCapturedFrames()` 现为「源帧数」（GDI 为解出的帧数，WGC 为从池里取走的帧数），新增 `GetPublishedFrames()` 为「真实发布新画面的次数」（GDI 每帧必进槽位，与源帧数同值；WGC 帧池无新帧时复用上一帧补节拍不计数）。`VideoPipelineStats::ReportIfDue` 改为接收两个计数，`[PIPE-STATS]` 日志把原来的单个「采集帧率」拆成 `源帧率 / 发布帧率 / 编码帧率`，并新增 `丢旧帧 = 源帧数 − 发布帧数`（即低延迟丢旧帧主动丢掉的帧数，GDI 恒为 0）；等待/转换/编码均值、码率、重复、跳帧字段保持不变。采集线程退出时补打 `source/published` 两个累计值。
+
+Verification: Qt 6.10.1 MSVC2022 Debug 重新 `qmake` + `jom /f Makefile.Debug -j4` 编译链接通过，exit 0，无 error（仅既有 warning）；`WGCScreenCapture.obj`、`GDISreenScapture.obj`、`VideoPipelineStats.obj`、`RtmpPushManager.obj` 均重新编译、`debug/ECloudAssistant.exe` 重新链接。未验证：`源帧率` 修完后实际是 ~58-60 还是仍 ~45——需 SRS + 双端实机跑一次看 `[PIPE-STATS]`，这是判断 WGC 采集能力的关键一次测量；若仍 ~45 再查 WGC/DWM 与 60Hz 轮询/WGC 产帧两套时钟的拍频问题（事件驱动采集留待那时再评估）。Commit ID: none. Rollback: 恢复 `Read(VideoFrame&)` 单参签名、`Run()` 里的 `++capturedFrames_`，以及 `ReportIfDue` 的单计数签名与日志行。
+
+
+## 采集/编码链路加帧龄与取帧阻塞指标（阶段三 step 1，只加指标）
+
+Date: 2026-10-06. Goal: 在**不改采集机制**的前提下，先把「帧在取出、发布、消费之间损失在哪里」测清楚，为后续事件驱动采集提供可比基线。此前的 `[PIPE-STATS]` 只有帧数与等待均值，无法区分缺帧、调度慢和帧本身已经很旧。
+
+Affected files: `ECloudAssistant/Pusher/StatsWindow.h`（新增）、`ECloudAssistant/Pusher/Pusher.pri`、`ECloudAssistant/Pusher/VideoPipelineStats.{h,cpp}`、`ECloudAssistant/Pusher/capture/WGCScreenCapture.cpp`、`ECloudAssistant/Pusher/RtmpPushManager.cpp`、and this worklog.
+
+Behavior: 新增头文件 `StatsWindow.h` 的 `UsWindow`——固定 256 样本滑动窗口，`Add/Max/Mean/Percentile(p)/Reset`，只在每秒报点排序一次，不逐帧落盘也不随运行时长增长，分位取窗口内真实样本不插值。WGC 侧新增匿名命名空间的 `QpcNow100ns()`，用商余拆分把 QPC 换算成与 `Direct3D11CaptureFrame::SystemRelativeTime` 同口径的 100ns 计数（避免 `counter * 1e7` 长期运行溢出）。`WgcState::Read` 增加出参 `qint64& frameAgeUs`，帧龄在取到最新帧后、**任何 `CopyResource`/`Close` 之前**立即采样，避免把复制与上下文锁等待算进帧龄；负帧龄如实上报不截零，首帧额外打一次原始 `sr/qpc/ageUs` 用于人工核对两个时钟同源。采集线程新增独立每秒一行的 `[CAP-STATS]`：源帧率 / 发布帧率 / 补发帧率 / 源帧数 / 发布帧数 / 补发数 / 丢旧帧 / 帧龄均值·峰值·P95us / 帧龄负值；该行由 WGC 线程自打，**不依赖编码完成**，编码卡住时采集指标仍然输出。`Run()` 里发布块区分「新画面」（`++publishedFrames_`）与「复用上一帧补节拍」（`++repeatTotal`）。编码侧 `VideoPipelineStats` 新增 `NoteFramePulled(blockUs)` 与 `[PIPE-STATS]` 新字段 `编码取帧率`、`取帧阻塞均值/峰值/P95us`：只量 `WaitLatestFrame` 自身的阻塞（60fps 下约 16.7ms 属完全正常），与原有「等待均值us」（采集完成到编码开始）彻底分开。帧池仍维持 2 块不动；事件驱动（`FrameArrived` 唤醒 + 立即 drain + 60Hz 只限制发布）与帧池 2/4/8 对照分别作为后续两个独立实验。
+
+Verification: Qt 6.10.1 MSVC2022 Debug 重新 `qmake` + `jom /f Makefile.Debug -j4` 编译链接通过，`BUILD_EXIT=0`，无 error（仅既有 `BufferReader.h`/`defin.h` warning）；确认 `WGCScreenCapture.obj`、`VideoPipelineStats.obj`、`RtmpPushManager.obj` 均重新编译、`debug/ECloudAssistant.exe` 重新链接。未验证：`[CAP-STATS]` 的帧龄读数是否落在合理量级（首帧探针需实机确认 `sr100ns` 与 `qpc100ns` 同源、差值等于真实帧龄），以及源帧率修完后是 ~58-60 还是仍 ~45——均需 SRS + 双端实机运行观察。Commit ID: none. Rollback: 删除 `StatsWindow.h` 与 `Pusher.pri` 中的登记项，恢复 `Read(VideoFrame&,quint32&)` 两参签名与 `Run()`/`EncodeVideo` 中对应的指标代码即可，采集与编码行为不受影响。
+
+后续精简（同日）：两条每秒统计行删掉可由其余字段直接推出的重复项——`[CAP-STATS]` 去掉「补发帧率 / 补发数」（补发数 = 发布帧数 − 丢旧帧 − …，且发布帧率/源帧数/丢旧帧已能完整刻画），`[PIPE-STATS]` 去掉「编码取帧率 / 源帧数 / 发布帧数」（取帧率稳态等于编码帧率，源/发布帧数采集侧那行已有）；`VideoPipelineStats` 的 `pulledFrames_` 成员与 `WGCScreenCapture::Run` 的 `repeatTotal` 统计随之删除。字段口径与采集/编码行为不变，仅日志变短。
+
+再次精简（同日，依据首次实机日志）：删掉两个「已死」字段——`[PIPE-STATS]` 的「重复」恒为 0（序号严格单调，补发也分配新序号，「同序号被编码两次」不可能发生），连同 `duplicateFrames_` 成员与重复分支一起删除；`[CAP-STATS]`/`[PIPE-STATS]` 的「帧龄峰值 / 取帧阻塞峰值」与同一行的 P95 实测几乎同值（256 样本窗口下 P95 逼近最大值），去掉峰值只留 P95，`UsWindow` 的 `Max()` 与 `max_` 随之删除。最终 `[CAP-STATS]` 8 字段、`[PIPE-STATS]` 14 字段。
+
+
+## 定位「丢掉的 10fps 是 Windows 没给还是代码弄丢」的诊断指标
+
+Date: 2026-10-06. Goal: 首次实机日志暴露两个未解项——(1) `帧龄负值` 以约 21/秒稳定累积（占源帧约 42%），说明 QPC 与 `SystemRelativeTime` 不是同一零点，帧龄绝对值不可信，且负值被排除在窗口外使「帧龄均值」系统性偏低；(2) 源帧率约 50 而目标是 60，且「WGC 只产 50」与「我们 drain 丢了 10」两种可能无法区分。本轮**只加诊断、不改采集架构**，目的是把哪个环节丢帧判死。
+
+Affected files: `ECloudAssistant/Pusher/StatsWindow.h`、`ECloudAssistant/Pusher/capture/WGCScreenCapture.{h,cpp}`、`ECloudAssistant/Pusher/VideoPipelineStats.{h,cpp}`、`ECloudAssistant/Codec/{AV_Common.h,HardwareVideoEncoder.cpp}`、`ECloudAssistant/Pusher/RtmpPushManager.cpp`、and this worklog.
+
+Behavior: `StatsWindow.h` 的窗口模板化为 `SampleWindow<T>`（`using UsWindow = SampleWindow<quint64>`），重新提供 `Min()/Max()`，`Mean()` 用 `qint64` 累加以容纳有符号样本。帧龄改用 `SampleWindow<qint64>`：**负值不再被剔除**，照常进窗口，日志报 `帧龄最小us / 均值us / P95us / 最大us / 负值`——最小值即 QPC 与 `SystemRelativeTime` 的偏移量级，据此可判断是常数小偏移（可标定后继续当延迟基线）还是时间戳语义不同。`WgcState::Read` 的出参收进 `ReadTiming` 结构（`drainedFrames / frameAgeUs / lockWaitUs / copyUs`）。帧池上注册 `FrameArrived` 处理器，**只 `fetch_add` 一个 `std::shared_ptr<std::atomic<quint64>>`、完全不碰 `WgcState`**——回调跑在 WGC 工作线程，可能在采集对象析构途中仍在执行，故计数器由回调自己持有一份，每次 `Init()` 换新的原子，避免 revoke 与在途回调的竞态；`[CAP-STATS]` 因此新增 `FrameArrived率`，与 `源帧率 / 发布帧率 / 丢旧帧` 并排即可判别：`FrameArrived≈60 但 drained≈50` 是取帧侧问题，`FrameArrived≈50` 则是 WGC/DWM 上游本来就只给 50。GPU 路径在两个交汇点量锁：采集侧 `Read()` 量 `lockContext()` 的等待与 `CopyResource` 调用耗时，编码侧 `EncodeGpuFrame` 量 `ContextLock()` 等待与 `VideoProcessorBlt` 调用耗时（Blt 即 GPU 侧 BGRA→NV12 转换，复用 `VideoEncodeTiming::convertUs` 口径，新增 `lockWaitUs`）。`[CAP-STATS]` 增 `取锁均值/P95us`、`Copy均值us`，`[PIPE-STATS]` 增 `编码取锁均值/P95us`。判据按用户给定：锁等待几十~几百 us 属正常串行，只有常态几毫秒到十几毫秒才值得重新设计 context/device 使用方式。
+
+Verification: Qt 6.10.1 MSVC2022 Debug `qmake` + `jom /f Makefile.Debug -j4` 编译链接通过，`BUILD_EXIT=0`，无 error（仅既有的 `OpenGLRender.cpp`/`BufferReader.h`/`defin.h` warning）；确认 `WGCScreenCapture.obj`、`HardwareVideoEncoder.obj`、`VideoPipelineStats.obj`、`RtmpPushManager.obj` 均重新编译、`debug/ECloudAssistant.exe` 重新链接。未验证：所有新指标的实际读数——需用确定 60fps 的全屏动态内容实机跑一次（GDI 对照降级为辅助）。Commit ID: none. Rollback: 删除 `FrameArrived` 注册与 `frameArrived_`、`ReadTiming`（恢复 `Read(VideoFrame&,quint32&,qint64&)`）、两处锁/拷贝打点与对应日志字段，`SampleWindow` 恢复为 `UsWindow` 单类型即可；采集与编码行为均未改变。
+
+实测结果（同日，路径 A：WGC GPU + NVENC，1920x1080，约 27 秒）：
+
+1. **`FrameArrived率` 与 `源帧率` 逐窗口吻合到 ±1**（27 个窗口全部如此，均值都约 49.9）。即帧池暴露多少帧我们就取走多少帧，**「事件到达 → drain」之间没有丢帧**。按既定分流表，这落到 `FrameArrived ≈ 50 / drained ≈ 50` 一支：WGC/DWM 上游本来就只给约 50fps，改事件驱动也换不来 60。
+2. **共享 D3D11 立即上下文锁完全不是瓶颈**：采集侧 `取锁均值` 恒为 0~1us、`取锁P95` 1~4us、`CopyResource` 3~5us（仅首窗 36us 属预热）；编码侧 `编码取锁均值/P95` 全部为 0。判据（几十~几百 us 即属正常串行）成立，**不需要重新设计 context/device 使用方式**。
+3. **帧龄是「展示时刻」量、且带约 -9.5ms 固定偏置**：首帧探针 `sr100ns = 57285150950`、`qpc100ns = 57285179612`（差 2.9ms）证明两个时钟同源，都是开机相对计数。因此 `帧龄负值` 不是 epoch 错误，而是时间戳确实晚于读取时刻——窗口 `帧龄最小us` 稳定在 -5.5 ~ -10.4ms（收敛于约 -9.5ms），`P95` +4.9 ~ +18ms，`最大` +5.4 ~ +27.6ms，负值约占取帧数 46%。**`SystemRelativeTime` 不是「渲染完成时刻」，帧龄的绝对值不能当渲染→取用的延迟基线，只有相对趋势可用。**
+4. 编码帧率恒 58~61（补发撑住），`跳帧` 基本为 0，`取帧阻塞均值` 11~14.5ms——消费侧不丢帧、不落后。
+5. 附带发现：`码率kbps` 在 5.5 ~ 32.8 Mbps 之间剧烈抖动（目标 12000），ULL + `delay=0` 下 NVENC 在复杂帧上过冲明显，是拉流端/网络的独立问题，与丢帧无关。
+
+**仍未排除的一项**：`FrameArrived` 统计的是「帧进入帧池」的次数。若 DWM 实际产 60 帧而 2 块帧池被覆盖，丢掉的帧发生在事件之前，`FrameArrived` 一样只能显示 50。帧池 2/4/8 对照是这个假设的直接检验，且只需改一个常量。
+
+## 采集／编码链路冗余精简与资源回收修复
+
+Date: 2026-10-06. Goal: 按代码审查结果修复推流事件循环所有权和编码参数边界，减少已确认的逐帧分配、复制及无调用接口；保留已有采集统计改动。所有项目改动、构建和验证文件位于 `D:\shared\assient`。
+
+Affected files: `ECloudAssistant/Codec/{H264Encoder.{h,cpp},VideoEncoder.{h,cpp},HardwareVideoEncoder.h,SoftwareVideoEncoder.cpp,VideoConvert.cpp}`、`ECloudAssistant/Net/TaskScheduler.cpp`、`ECloudAssistant/Pusher/{RtmpPushManager.{h,cpp},capture/ScreenCapture.h,capture/WGCScreenCapture.h,rtmp/RtmpPublisher.{h,cpp}}`；新增 `ECloudAssistant/tests/EncoderOptimizationTest.{cpp,pro}`；以及本日志。既有 WGC 诊断、统计窗口和未提交文档改动保留，独立新增的 FrameArrived／锁等待指标不计入本轮优化行数。
+
+Behavior:
+
+- `RtmpPushManager::loop_` 改为 `unique_ptr`；析构先结束编码、采集与发布对象，再析构事件循环并回收后台线程。快速创建后立即销毁的实测暴露 `TaskScheduler::Start()` 清除已到达的停止标志，导致 `join()` 永不返回；删除这次复位，初值继续由构造函数设置。调用链中每个调度器只启动一次，重新建立 EventLoop 会创建新的调度器。
+- H.264 输出按实际包长直接拼接 SPS/PPS 和码流；编码线程复用输出 vector 容量，删除 `width*height*4` 临时输出数组及其再次拷贝。构造阶段不再分配无用软编占位对象；重开失败和重复 Close 后不保留旧会话。
+- CPU BGRA 以实际 stride 同步借用采集缓冲完成 swscale，删除编码端 BGRA 像素数组和整帧行复制。GDI 三缓冲的 front 在下一次取帧前不会被采集线程写入；WGC CPU 帧持有 owner，借用只持续到转换结束。转换输出继续独立分配并交给 FFmpeg。
+- 紧凑行与带填充行的奇数宽度输入测试发现右边缘色度差异，奇数宽 BGRA 转换增加 `SWS_FULL_CHR_H_INP` 后解码像素逐字节一致；偶数宽输入仍沿用原转换标志。
+- AAC 直接交给 `RtmpPublisher::PushAudioFrame(const uint8_t*,...)`，删除管理器内临时分配和复制；Publisher 仍同步复制到持有所有权的网络缓冲，异步发送不借用原 AAC 包。
+- `GetSequenceParams` 检查未打开、空指针及输出容量；短缓冲拒绝且不写入。libx264 自动选择 H.264 level，1080p30/60 实测 SPS 分别为 4.0/4.2。删除无调用的 getter、GPU 能力查询、关键帧判断、旧编码包装入口和冗余 reset 后赋空操作。
+
+Verification:
+
+1. Qt 6.10.1 MSVC2022 Debug 主项目 qmake／jom 构建链接通过，`BUILD_EXIT=0`；最后资源回收修复后增量构建再次通过。主项目既有警告未在本轮展开处理。
+2. 独立回归测试构建／运行通过，`TEST_BUILD_EXIT=0`、`TEST_EXIT=0`：确定性 Stop-before-Start；20 次 EventLoop 创建／销毁线程数 4→4；编码器开关／重开失败；SPS 等级；短／空／恰好容量的参数缓冲；非法 stride；偶数与奇数尺寸、尺寸变化、源缓冲不被写入；4 帧编码／解码及关键帧 SPS/PPS。紧凑行与带填充行解码像素差异数为 0。故意传零宽度时 libx264 报错属于失败用例，测试正常通过；测试自身新增的 size_t 转换警告已修正。
+3. 使用已有本地 WGC 探针重编译验证：WGC GPU＋NVENC 与 WGC CPU＋x264 各 3 次启停，每次 60 个编码包、60 帧成功解码，均 `PROBE PASS`。探针是本机采集／编码／解码检查，没有发送 RTMP，也不代表动态内容帧率测量。
+4. 使用主项目对象链接的资源探针，`RtmpPushManager` 连续创建／销毁 20 次，线程数 4→4，`LOOP_PROBE_EXIT=0`。修复前快速销毁可卡住，已结束该测试进程；修复后无残留测试进程。
+5. 本轮涉及文件的 `git diff --check` 通过。
+
+Statistics（相对本轮开始前的工作区快照，排除独立诊断改动，行数包括注释／空行）：业务文件 14 个，新增 66 行、删除 168 行，净减少 102 行；新增回归测试 2 个文件共 223 行（201＋22），文档不计入代码统计。
+
+| 操作 | 本轮减少量 |
+| --- | --- |
+| 每个 H.264 输出包 | 1 次大临时数组分配、1 次码流整体复制；1080p 临时数组原为 8,294,400 字节（约 7.91 MiB） |
+| 每个 CPU BGRA 输入帧 | 1 次整帧复制；1080p 为 8,294,400 字节，60fps 时理论少复制约 498 MB/s 的数据量 |
+| CPU 编码会话／输入尺寸重建 | 1 份 BGRA 像素缓冲分配 |
+| 每个 AAC 输出包 | 1 次临时数组分配、1 次负载复制 |
+| H264Encoder 构造 | 1 次无用软编占位对象分配 |
+
+这些数值是代码路径的静态计数，输出 vector 扩容、swscale 输出帧、FFmpeg 内部分配及网络缓冲仍存在；不是实测内存带宽或帧率提升。
+
+Commit ID: none（本轮未提交／推送）。Remaining limitation: 未测双端 RTMP、端到端延迟、长时间资源曲线或异常运行时 GPU→CPU 降级；GPU 纹理池／VideoProcessor 视图复用仍需测量资源在用时机后另做，不能由本次局部优化推断帧率达到 60。Rollback: 仅撤销本节列出的优化修改和新增回归测试，保留既有诊断与其他未提交工作，不整体恢复到 HEAD。
+
+## 提交采集编码优化与 WGC 诊断指标
+
+Date: 2026-10-06. Goal: 将本轮采集／编码优化、现有 WGC 诊断指标及回归测试提交至本地 main 并推送 origin/main。Affected files: 本节所属提交的文件清单（`git show --stat`）；包含 Codec、TaskScheduler、Pusher/capture/rtmp、StatsWindow、编码回归测试以及 WGC 实验记录／工作日志。Behavior: 同前述优化与诊断记录，提交操作不增加运行时行为或协议变化；无关的 WASAPICapture 空行、ENET 空白、解码文档空行及未跟踪工具／笔记文件保留在工作区。
+
+Verification: 提交前对当前工作区重新运行 Qt 6.10.1 MSVC2022 Debug qmake＋jom，`BUILD_EXIT=0`；编码／线程回收回归再次通过，`TEST_EXIT=0`，EventLoop 20 次创建销毁线程数 4→4，带填充行与紧凑行解码像素差异为 0。暂存内容检查通过后提交；远端是否同步以本次终端 push／ls-remote 结果为准。此前 WGC GPU／CPU 各三次启停证据沿用上一节，本次没有重新测量双端 RTMP 或端到端性能。
+
+Commit ID: 本节所属提交（提交完成后用 `git log -1 --format=%H -- context/WORKLOG.md` 获取，避免把自引用哈希写入提交内容）。Remaining limitation: 双端 RTMP、长时间稳定性与异常 GPU 退化仍未重新验收。Rollback: 对本次提交使用常规 revert，保留现有其他工作区改动。

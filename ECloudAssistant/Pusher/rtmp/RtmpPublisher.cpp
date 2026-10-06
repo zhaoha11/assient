@@ -171,7 +171,7 @@ int RtmpPublisher::PushVideoFrame(const uint8_t *data, uint32_t size)
 
 }
 
-int RtmpPublisher::PushAudioFrame(uint8_t *data, uint32_t size)
+int RtmpPublisher::PushAudioFrame(const uint8_t *data, uint32_t size)
 {
     if(rtmp_conn_ == nullptr || rtmp_conn_->IsClosed() || size <= 0)
     {
