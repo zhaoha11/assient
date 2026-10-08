@@ -14,6 +14,7 @@ HEADERS += \
     $$PWD/capture/ScreenCapture.h \
     $$PWD/capture/VideoSource.h \
     $$PWD/capture/WGCScreenCapture.h \
+    $$PWD/capture/WgcTexturePool.h \
     $$PWD/capture/WASAPICapture.h \
     $$PWD/rtmp/RtmpChunk.h \
     $$PWD/rtmp/RtmpConnection.h \

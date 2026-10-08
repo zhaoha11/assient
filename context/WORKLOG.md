@@ -1548,3 +1548,36 @@ Date: 2026-10-06. Goal: 审阅并提交摄像头采集第一阶段及 UI／信�
 Verification: 提交前 MSVC2022／Qt 6.10.1 Debug 重新 qmake＋jom 构建链接成功，CameraCapture.cpp 重新编译，BUILD_EXIT=0；既有编码／事件循环回归测试退出 0，线程数 4→4、带填充行解码差异为 0。这次未重新打开摄像头或验证双端 RTMP，前述独立摄像头探针结果只作为已有证据。暂存范围限定摄像头功能及其文档，既有 WGC 实验／统计精简日志保留未暂存。
 
 Commit ID: 本节所属提交（用 `git log -1 --format=%H -- context/WORKLOG.md` 获取）。Remaining limitation: Linux 信令服务器需要重编译部署；双端播放、连续启停、异常设备／尺寸变化实机用例仍待验收；dshow 停止出帧时可能卡住 Close 的限制尚未解决。Rollback: 对本次提交进行常规 revert，保留其他工作区改动。
+
+## WGC 固定三槽 BGRA 纹理池
+
+Date: 2026-10-08. Goal: 去掉 WGC GPU 路径逐帧创建 owned BGRA Texture 的开销，保持正在使用的纹理不被提前覆盖。Affected files: `ECloudAssistant/Pusher/capture/WgcTexturePool.h`（新增）、`WGCScreenCapture.cpp`、`Pusher/Pusher.pri`，新增 `ECloudAssistant/tests/WgcTexturePoolTest.{cpp,pro}`，以及本日志。
+
+Behavior:
+
+- 每代预创建 3 块独立 BGRA 纹理，保留原有 DEFAULT／SHADER_RESOURCE／RENDER_TARGET 属性。仅采集线程申请槽位；池与 WgcGpuFrame 共同持有槽位 shared_ptr，仅剩池自身引用时可重用。帧副本、lastFrame、latestFrame 和编码线程均保护同一槽位；无裸采集对象归还回调，无循环引用。
+- 池满时释放本次 WGC 帧并返回 none，沿用上一帧的既有发布节拍，不等待、不扩容；现有源帧／发布帧统计及序号逻辑不变，没有增加产品统计。
+- CopyResource 与 VideoProcessorBlt 继续使用同一立即上下文及原 ContextLock，依赖提交顺序保护 GPU 读写；未增加逐帧 GPU 等待、Flush 或查询。NVENC、NV12 硬件帧池、转换视图、编码时间轴、RTMP 与 CPU 读回路径不做优化改动。
+- GPU 内容尺寸变化先关闭过渡 WGC 帧再 Recreate，避免尺寸增大时按旧 surface 校验失败；按实际纹理尺寸、格式、mip、array、采样描述和 device 建新一代 BGRA 池。完整创建成功才换代；旧帧独立保活旧纹理，释放后自然销毁。三槽上限针对当前代，跨尺寸／会话仍在途的旧帧可暂时额外占用显存。编码输出尺寸沿用已有规则。
+- Stop／Close 保留原唤醒、join 次序，重复 Close 安全。补充重建失败后的空 state 检查；工作线程未预期异常时停止、清理最新帧并唤醒初始化／取帧等待者；WinRT 用局部 RAII 在资源析构后解除初始化。首帧等待同时要求未停止，防止异常退出时把残留帧误判为初始化成功。
+
+Verification:
+
+1. 首轮 Qt 6.10.1 MSVC2022 x64 Debug 主项目 qmake＋jom 构建链接成功，独立测试目标构建成功，均退出 0；沙箱内初次编译器探测／jom 子进程失败，授权后在沙箱外构建通过。
+2. WARP 独立测试通过：恰好三槽、持有两槽时第三槽 500 次稳定地址复用、被持有纹理逐字节不变、共享副本保护、跨线程释放、无效描述创建失败、第二槽分配异常导致部分创建回滚、128×64／32×16 增大缩小换代、池及 device 所有者销毁后旧帧仍有效。
+3. 首轮真实 WGC GPU＋NVENC 测试连续 20 次同对象启停，每次 30 包编码并解码 30 帧（合计 600 帧），每会话只观察到 3 个 BGRA 纹理地址；持有首帧跨后续采集编码、重复 Close、下一次 Init 与共享上下文销毁，纹理内容逐字节不变。WGC CPU＋x264 3 次启停，各 30 帧编解码通过。测试未发送 RTMP，读回仅用于测试比对。
+4. 最后补充首帧停止判定及显式头文件后，主程序和测试目标增量重建均退出 0，无新增编译警告／错误；完整测试再次退出 0（独立池测试、GPU 20×30 帧、CPU 3×30 帧全部通过）。最终构建日志：`ECloudAssistant/build/Desktop_Qt_6_10_1_MSVC2022_64bit-Debug/bgra-pool-build-final.log`；测试构建与运行日志：`ECloudAssistant/build/wgc-texture-pool-test/{build-final,live-test-final}.log`。本轮涉及文件的差异空白检查通过；全工作区检查另发现原有 `ENET/CMakeLists.txt` 行末空格及 `context/解码渲染端延迟处理.md` 末尾空行，未改动这些无关内容。
+
+Commit ID: none（未提交／推送）。Remaining limitation: 实际显示器分辨率切换、显示器拔插、驱动/device removal、运行时强制异常后的上层恢复、双端 RTMP、长时间显存曲线与端到端性能未实测。尺寸及分配失败证据来自独立池测试，不能替代 WGC 实机换尺寸或设备丢失验证；纹理创建减少由源码创建路径、稳定地址复用及持帧测试验证，未做驱动 API 调用跟踪，不声称帧率或延迟已改善。Rollback: 仅撤销本节涉及的池化、WGC 生命周期改动、测试与 qmake 头文件登记，保留本轮开始前所有未提交工作。
+
+### 本轮临时测试文件清理
+
+Date: 2026-10-08. Goal: 按用户要求，验证完成后删除本轮临时测试文件。Affected files: 删除 `ECloudAssistant/tests/WgcTexturePoolTest.{cpp,pro}`、整个 `ECloudAssistant/build/wgc-texture-pool-test` 独立测试目录（含测试程序、对象文件、Makefile 和日志）、主程序构建目录内本轮的 `bgra-pool-build.log` 与 `bgra-pool-build-final.log`。Behavior: 保留 BGRA 纹理池产品实现和以上验证结果记录；前节所列测试源码及日志路径现已删除，历史测试结论不代表这些文件仍可直接运行或查阅。Verification: 删除前核对绝对路径均在工作区内且无链接目标，删除后五个目标均不存在（REMAINING_TARGETS=0）；未修改产品代码，无需重复构建。Commit ID: none。Remaining limitation: 前节所列未实测项目不变；重新运行此专项测试需重新准备测试程序。后续临时验证文件在验证完成后清理。
+
+### 清理 tests 目录内剩余测试源码
+
+Date: 2026-10-08. Goal: 按用户进一步要求删除剩余测试文件。Affected files: 删除 `ECloudAssistant/tests/EncoderOptimizationTest.cpp`、`EncoderOptimizationTest.pro`、`FlvAvcPacketTest.cpp`、`VideoFramePresenterTest.cpp`，并移除空 tests 目录。Behavior: 仅移除独立测试源码／工程，产品实现不变。Verification: 工程引用检查仅发现被删除测试工程对自身源码的引用，主项目没有引用这四个测试文件；删除后 tests 目录不存在；本轮 WGC 专项测试文件复查亦无残留。未重新构建。Commit ID: none。Remaining limitation: 历史验证记录保留，已删除的旧测试需从 Git 历史恢复后才能重跑。
+
+### 纹理池优化本地提交检查
+
+Date: 2026-10-08. Goal: 审阅并本地提交 BGRA 纹理池优化及用户要求的测试文件清理。Affected files: WgcTexturePool.h、WGCScreenCapture.cpp、Pusher.pri、四个已删除的 tests 文件，以及本日志的本轮记录。Verification: 复核单生产者槽位申请、共享帧保活、同立即上下文串行提交、尺寸换代与停止清理，未发现新的阻断问题；沿用本会话已通过的最终 MSVC Debug 构建、独立池测试、GPU 20 次和 CPU 3 次启停结果，本次仅提交与更新记录，不重复生成测试文件。暂存仅含本轮变更，原有 WASAPICapture.cpp、ENET/CMakeLists.txt、其他文档及本日志旧段落的未提交修改继续保留。Commit ID: 本节所属提交（用 `git log -1 --format=%H -- context/WORKLOG.md` 获取）。Remaining limitation: 前述实机分辨率切换、设备丢失和双端 RTMP 等未验证范围不变；此次仅本地提交，不推送远端。

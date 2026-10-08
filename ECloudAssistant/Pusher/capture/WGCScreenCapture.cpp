@@ -2,6 +2,7 @@
 #include "AV_Common.h"
 #include "D3D11SharedContext.h"
 #include "StatsWindow.h"
+#include "WgcTexturePool.h"
 
 #include <QDebug>
 #include <algorithm>
@@ -65,10 +66,9 @@ quint64 QpcNow100ns()
 class WgcGpuFrame : public IGpuVideoFrame
 {
 public:
-    WgcGpuFrame(ComPtr<ID3D11Texture2D> texture, ComPtr<ID3D11Device> device,
+    WgcGpuFrame(std::shared_ptr<WgcTexturePool::Slot> slot,
                 quint32 width, quint32 height)
-        : texture_(std::move(texture))
-        , device_(std::move(device))
+        : slot_(std::move(slot))
         , width_(width)
         , height_(height)
     {
@@ -77,12 +77,11 @@ public:
     quint32 width() const override { return width_; }
     quint32 height() const override { return height_; }
     VideoPixelFormat format() const override { return VideoPixelFormat::Bgra8; }
-    void* nativeTexture() const override { return texture_.Get(); }
-    void* nativeDevice() const override { return device_.Get(); }
+    void* nativeTexture() const override { return slot_->texture.Get(); }
+    void* nativeDevice() const override { return slot_->device.Get(); }
 
 private:
-    ComPtr<ID3D11Texture2D> texture_;
-    ComPtr<ID3D11Device> device_;
+    std::shared_ptr<WgcTexturePool::Slot> slot_;
     quint32 width_;
     quint32 height_;
 };
@@ -104,6 +103,7 @@ struct WgcState
     wgc::Direct3D11CaptureFramePool pool{nullptr};
     wgc::GraphicsCaptureSession session{nullptr};
     ComPtr<ID3D11Texture2D> staging;
+    WgcTexturePool bgraPool;
     UINT stagingWidth = 0;
     UINT stagingHeight = 0;
     bool ageProbeLogged = false;   // 帧龄口径只打一次原始值
@@ -216,10 +216,10 @@ struct WgcState
                            quint32 width, quint32 height)
     {
         if(content.Width == poolSize.Width && content.Height == poolSize.Height) return;
-        poolSize = content;
         pool.Recreate(graphicsDevice,
                       winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                      2,poolSize);
+                      2,content);
+        poolSize = content;
         qInfo() << "WGC capture resized" << width << "x" << height;
     }
 
@@ -267,6 +267,17 @@ struct WgcState
             }
 
             const auto content = newest.ContentSize();
+            // GPU 路径丢弃尺寸过渡帧，先释放 WGC 帧再 Recreate。
+            // 放大时 ContentSize 可能已超过旧 surface，不能先按旧纹理校验并报错。
+            if(gpuTexture && content.Width > 0 && content.Height > 0 &&
+               (content.Width != poolSize.Width || content.Height != poolSize.Height))
+            {
+                newest.Close();
+                newest = nullptr;
+                MaybeRecreatePool(content,static_cast<quint32>(content.Width),
+                                  static_cast<quint32>(content.Height));
+                return ReadResult::none;
+            }
             auto surface = newest.Surface();
             auto access = surface.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
             ComPtr<ID3D11Texture2D> texture;
@@ -293,31 +304,34 @@ struct WgcState
             if(gpuTexture)
             {
                 // 不直接持有 pool 的纹理：pool 只有 2 块缓冲，被编码线程占住会饿死 TryGetNextFrame。
-                // 改为复制进每帧新建的自有纹理，与 pool 回收彻底解耦（纹理池化留待后续优化）。
-                D3D11_TEXTURE2D_DESC copyDesc = desc;
-                copyDesc.Usage = D3D11_USAGE_DEFAULT;
-                copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-                copyDesc.CPUAccessFlags = 0;
-                copyDesc.MiscFlags = 0;
-                ComPtr<ID3D11Texture2D> owned;
-                hr = device->CreateTexture2D(&copyDesc,nullptr,owned.GetAddressOf());
+                // 固定三槽：只有最后一个帧持有者释放后才允许覆盖，不等待、不临时扩容。
+                hr = bgraPool.Ensure(device.Get(),desc);
                 if(FAILED(hr))
                 {
+                    qWarning() << "WGC BGRA texture pool creation failed" << Qt::hex << hr;
                     newest.Close();
                     return ReadResult::error;
+                }
+                auto slot = bgraPool.Acquire();
+                if(!slot)
+                {
+                    newest.Close();
+                    return ReadResult::none;
                 }
                 {
                     const std::chrono::steady_clock::time_point lockBegin = std::chrono::steady_clock::now();
                     std::unique_lock<std::mutex> contextLock = lockContext();
                     timing.lockWaitUs = ElapsedUs(lockBegin);
                     const std::chrono::steady_clock::time_point copyBegin = std::chrono::steady_clock::now();
-                    context->CopyResource(owned.Get(),texture.Get());
+                    // 与编码侧 VideoProcessorBlt 使用同一立即上下文/锁。
+                    // 上一次读取命令先于本次覆盖提交，无需在 CPU 上等待 GPU 完成。
+                    context->CopyResource(slot->texture.Get(),texture.Get());
                     timing.copyUs = ElapsedUs(copyBegin);
                 }
 
                 out = VideoFrame{};
                 out.kind = VideoFrameKind::Gpu;
-                out.gpu = std::make_shared<WgcGpuFrame>(owned,device,width,height);
+                out.gpu = std::make_shared<WgcGpuFrame>(std::move(slot),width,height);
                 out.width = width;
                 out.height = height;
 
@@ -390,7 +404,7 @@ struct WgcState
         }
         catch(const winrt::hresult_error& error)
         {
-            if(newest) newest.Close();
+            try { if(newest) newest.Close(); } catch(const winrt::hresult_error&) {}
             qWarning() << "WGC frame read failed" << Qt::hex << error.code().value;
             return ReadResult::error;
         }
@@ -436,12 +450,28 @@ bool WGCScreenCapture::Init(qint64 display_index)
         initOk_ = false;
         latestFrame_ = VideoFrame{};
     }
-    worker_ = std::thread([this]{ Run(); });
+    worker_ = std::thread([this]
+    {
+        try { Run(); }
+        catch(...)
+        {
+            qWarning() << "WGC worker failed unexpectedly; stopping capture";
+            RequestStop();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                initOk_ = false;
+                initDone_ = true;
+                latestFrame_ = VideoFrame{};
+                hasNewFrame_ = false;
+            }
+            initReady_.notify_all();
+        }
+    });
     std::unique_lock<std::mutex> lock(mutex_);
     initReady_.wait(lock,[this]{ return initDone_; });
     const bool initialized = initOk_;
     const bool ok = initialized && frameReady_.wait_for(
-        lock,std::chrono::seconds(3),[this]{ return hasNewFrame_ || stopped_; }) && hasNewFrame_;
+        lock,std::chrono::seconds(3),[this]{ return hasNewFrame_ || stopped_; }) && hasNewFrame_ && !stopped_;
     lock.unlock();
     if(!ok && initialized) qWarning() << "WGC produced no startup frame within 3 seconds";
     if(!ok) Close();
@@ -507,6 +537,12 @@ void WGCScreenCapture::Publish(const VideoFrame& frame, quint64 sequence)
 void WGCScreenCapture::Run()
 {
     const HRESULT initHr = RoInitialize(RO_INIT_MULTITHREADED);
+    // 异常展开时也必须在所有局部 WGC 对象销毁后解除 WinRT 初始化。
+    struct RoScope
+    {
+        HRESULT result;
+        ~RoScope() { if(SUCCEEDED(result)) RoUninitialize(); }
+    } roScope{initHr};
     const bool gpuOutput = (captureOutput_.load() == CaptureOutput::GpuTexture);
     D3D11SharedContext* shared = externalDevice_.load();
     std::unique_ptr<WgcState> state;
@@ -532,7 +568,6 @@ void WGCScreenCapture::Run()
     if(!state)
     {
         if(FAILED(initHr)) qWarning() << "WGC RoInitialize failed" << Qt::hex << initHr;
-        if(SUCCEEDED(initHr)) RoUninitialize();
         return;
     }
 
@@ -596,7 +631,7 @@ void WGCScreenCapture::Run()
         if(now >= nextMonitorCheck)
         {
             nextMonitorCheck = now + std::chrono::seconds(1);
-            if(MonitorFromPoint(POINT{0,0},MONITOR_DEFAULTTOPRIMARY) != state->monitor)
+            if(state && MonitorFromPoint(POINT{0,0},MONITOR_DEFAULTTOPRIMARY) != state->monitor)
             {
                 qInfo() << "WGC primary monitor changed; restarting capture session";
                 state.reset();
@@ -668,5 +703,4 @@ void WGCScreenCapture::Run()
         workerWake_.wait_until(lock,nextTick,[this]{ return stop_.load(); });
     }
     state.reset();
-    RoUninitialize();
 }
